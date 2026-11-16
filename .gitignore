@@ -1,0 +1,39 @@
+# Dependências e arquivos gerados pelo build
+node_modules/
+/dist/
+/public/
+
+# Configuração local e credenciais
+.env
+.env.*
+!.env.example
+*.pfx
+*.p12
+*.pem
+*.key
+
+# Bancos, mídias e backups locais
+*.sqlite*
+*.db
+*.db-*
+/.local-data/
+/data/
+/media/
+/backups/
+
+# Logs e resultados de verificações
+*.log
+/logs/
+coverage/
+test-results/
+playwright-report/
+playwright/.cache/
+*.tsbuildinfo
+
+# Arquivos temporários do sistema e de editores
+.DS_Store
+Thumbs.db
+Desktop.ini
+*.swp
+*.swo
+*~

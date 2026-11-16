@@ -1,0 +1,53 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    name: TypeScript, testes e build (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 20
+    steps:
+      - name: Obter código
+        uses: actions/checkout@v4
+
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+
+      - name: Preparar diretório temporário dos testes
+        shell: pwsh
+        run: |
+          if (-not (Test-Path -LiteralPath $env:TEMP)) { throw 'Diretório temporário não encontrado.' }
+          New-Item -ItemType Directory -Path (Join-Path $env:TEMP 'opencode') -Force | Out-Null
+
+      - name: Instalar dependências
+        run: npm ci
+
+      - name: Verificar TypeScript
+        run: npm run check
+
+      - name: Executar testes
+        run: npm test
+
+      - name: Compilar aplicação
+        run: npm run build
+
+      - name: Instalar Chromium para os testes
+        run: npx playwright install chromium
+
+      - name: Executar testes de navegador
+        run: npm run test:browser
