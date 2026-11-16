@@ -23,16 +23,16 @@ export function editable(db: Db, id: string, revision: number) {
   return post;
 }
 export function touch(db: Db, id: string) { db.prepare("UPDATE posts SET revision=revision+1,approved_revision=NULL,status='rascunho',updated_at=? WHERE id=?").run(new Date().toISOString(), id); }
-export function deleteDraft(db: Db, id: string, revision: number) {
+export function deletePost(db: Db, id: string, revision: number) {
   db.transaction(() => {
-    const post = editable(db, id, revision);
-    if (post.status !== 'rascunho') throw new AppError('Somente posts em rascunho podem ser removidos.', 409);
+    const post = getPost(db, id);
+    if (post.revision !== revision) throw new AppError('O conteúdo mudou em outra operação. Reabra o post.', 409, 'revision_conflict');
     const { topic_id: topicId } = db.prepare('SELECT topic_id FROM posts WHERE id=?').get(id) as { topic_id: string };
     db.prepare('DELETE FROM uploads WHERE attempt_id IN (SELECT id FROM attempts WHERE post_id=?)').run(id);
     db.prepare('DELETE FROM attempts WHERE post_id=?').run(id);
     db.prepare('DELETE FROM revisions WHERE post_id=?').run(id);
     db.prepare('DELETE FROM media WHERE post_id=?').run(id);
-    db.prepare("UPDATE runs SET post_id=NULL,detail=COALESCE(detail || ' ', '') || 'Rascunho removido.' WHERE post_id=?").run(id);
+    db.prepare("UPDATE runs SET post_id=NULL,detail=COALESCE(detail || ' ', '') || 'Publicação removida da aplicação.' WHERE post_id=?").run(id);
     db.prepare('DELETE FROM posts WHERE id=?').run(id);
     db.prepare('DELETE FROM news WHERE topic_id=? AND NOT EXISTS (SELECT 1 FROM posts WHERE news_id=news.id)').run(topicId);
     db.prepare('DELETE FROM topics WHERE id=? AND NOT EXISTS (SELECT 1 FROM posts WHERE topic_id=topics.id) AND NOT EXISTS (SELECT 1 FROM news WHERE topic_id=topics.id)').run(topicId);

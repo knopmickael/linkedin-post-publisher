@@ -16,7 +16,7 @@ import type { Config } from './config.js';
 import { AppError, message } from './errors.js';
 import { models } from './openai.js';
 import { generate } from './generation.js';
-import { addMedia, approve, deleteDraft, editable, getPost, mediaBytes, renderImage, replaceMedia, touch } from './posts.js';
+import { addMedia, approve, deletePost, editable, getPost, mediaBytes, renderImage, replaceMedia, touch } from './posts.js';
 import { publish } from './linkedin.js';
 
 const idSchema = z.string().uuid();
@@ -60,8 +60,8 @@ export async function createApp(config: Config) {
   app.get('/api/posts/:id', async request => { recover(db); return getPost(db, idSchema.parse((request.params as { id: string }).id)); });
   app.delete('/api/posts/:id', async request => {
     const id = idSchema.parse((request.params as { id: string }).id);
-    deleteDraft(db, id, revisionSchema.parse(request.body).revision);
-    return { message: 'Rascunho removido.' };
+    deletePost(db, id, revisionSchema.parse(request.body).revision);
+    return { message: 'Publicação removida da aplicação.' };
   });
   app.post('/api/generate', async (request, reply) => {
     const { count } = z.object({ count: z.number().int().min(1).max(20).default(1) }).parse(request.body);

@@ -94,7 +94,7 @@ A aplicação inicializa uploads em `/rest/images`, envia os bytes e cria um pos
 
 Você decide quando gerar cada rascunho: use **Gerar agora** no painel ou o comando `generate` da CLI. Não há geração automática por horário. No painel, a geração começa com imagem única; escolha formato e quantidade de imagens na seção **Imagens do post** do editor. Na CLI, também é possível usar `--count`. O histórico editorial fica no SQLite.
 
-Para remover um post ainda em **Rascunho**, use a lixeira no canto superior direito do card em Publicações e confirme no modal. A listagem e os contadores são atualizados após a exclusão. A execução de geração permanece no histórico, sem link para o rascunho removido.
+Para remover uma publicação em qualquer estado (**Rascunho**, **Aprovado**, **Publicando**, **Publicado** ou **Falha**), use a lixeira no canto superior direito do card em Publicações e confirme no modal. A exclusão remove o registro local; não exclui nem cancela o envio de um post no LinkedIn. A listagem e os contadores são atualizados após a exclusão. A execução de geração permanece no histórico, sem link para a publicação removida.
 
 ### Foco de pesquisa
 
