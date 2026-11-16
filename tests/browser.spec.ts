@@ -3,6 +3,38 @@ import path from 'node:path';
 import sharp from 'sharp';
 import { openDb } from '../src/db.js';
 import { seedPost } from './helpers.js';
+import { loadEnv } from 'vite';
+
+test('copia o texto atual e abre a conversa configurada; informa falha ao copiar', async ({ page, context }) => {
+  const conversationUrl = loadEnv('production', process.cwd()).VITE_CHATGPT_CONVERSATION_URL;
+  test.skip(!conversationUrl, 'Configure VITE_CHATGPT_CONVERSATION_URL antes do build para validar a conversa.');
+  const db = openDb(path.resolve('.local-data', 'browser-tests')); seedPost(db); db.close();
+  await context.grantPermissions(['clipboard-read', 'clipboard-write']);
+  await context.route(conversationUrl, route => route.fulfill({ contentType: 'text/html', body: '<h1>Conversa de teste</h1>' }));
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/'); await page.getByRole('button', { name: /Spring Boot: atualização prática/ }).first().click();
+  expect(await page.locator('main').ariaSnapshot()).toContain('Copiar publicação e abrir ChatGPT');
+  const text = 'Texto atual, ainda não salvo.\n\nCom acentuação e fonte: https://spring.io/';
+  await page.getByLabel('Texto da publicação', { exact: true }).fill(text);
+  const button = page.getByRole('button', { name: 'Copiar publicação e abrir ChatGPT ↗', exact: true });
+  const upload = page.getByRole('button', { name: /Importar imagens/ });
+  expect((await button.boundingBox())!.y).toBeLessThan((await upload.boundingBox())!.y);
+  const popupEvent = page.waitForEvent('popup'); await button.focus(); await page.keyboard.press('Enter');
+  const popup = await popupEvent; await popup.waitForURL(conversationUrl);
+  expect(await popup.evaluate(() => window.opener)).toBeNull();
+  await popup.close(); await page.bringToFront();
+  expect((await page.evaluate(() => navigator.clipboard.readText())).replace(/\r\n/g, '\n')).toBe(text);
+  await expect(page.getByRole('status')).toContainText('Texto da publicação copiado');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(button).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.evaluate(() => { navigator.clipboard.writeText = async () => { throw new Error('Permission denied'); }; });
+  await button.click();
+  await expect(page.getByRole('alert')).toContainText('Não foi possível copiar o texto');
+  await expect(button).toBeEnabled();
+  await page.getByLabel('Texto da publicação', { exact: true }).fill('');
+  await expect(button).toBeDisabled();
+});
 
 test('painel, revisão, importação, aprovação, exportação e responsividade', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', e => errors.push(e.message));
@@ -94,4 +126,48 @@ test('configurações mostram estado de conexão e permitem salvar e conectar se
   await expect(page.getByLabel('Client Secret', { exact: true })).toHaveValue('');
   await expect(page.locator('#linkedin-connect-help')).toContainText('As credenciais já estão salvas');
   expect(connections).toBe(1);
+});
+
+test('publicações geram sem seletor e removem somente rascunhos com confirmação acessível', async ({ page }) => {
+  const errors: string[] = []; page.on('pageerror', e => errors.push(e.message));
+  const db = openDb(path.resolve('.local-data', 'browser-tests'));
+  const id = seedPost(db), approvedId = seedPost(db);
+  const draftTitle = `AI: rascunho para remover ${id.slice(0, 8)}`, approvedTitle = `Cloud: publicação aprovada ${approvedId.slice(0, 8)}`;
+  db.prepare('UPDATE news SET title=? WHERE id=(SELECT news_id FROM posts WHERE id=?)').run(draftTitle, id);
+  db.prepare('UPDATE news SET title=? WHERE id=(SELECT news_id FROM posts WHERE id=?)').run(approvedTitle, approvedId);
+  db.prepare("UPDATE posts SET status='aprovado' WHERE id=?").run(approvedId); db.close();
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/'); await expect(page.getByRole('heading', { name: 'Suas publicações.' })).toBeVisible();
+  expect(await page.locator('main').ariaSnapshot()).toContain('Suas publicações');
+  await expect(page.locator('.generate-actions select')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: `Remover rascunho: ${approvedTitle}`, exact: true })).toHaveCount(0);
+  const remove = page.getByRole('button', { name: `Remover rascunho: ${draftTitle}`, exact: true });
+  await page.screenshot({ path: 'test-results/posts-desktop.png', fullPage: true });
+  await remove.click();
+  const dialog = page.getByRole('dialog', { name: 'Remover rascunho?' });
+  await expect(dialog).toBeVisible(); await expect(dialog.getByRole('button', { name: 'Cancelar' })).toBeFocused();
+  await expect(page.getByRole('heading', { name: 'Suas publicações.' })).toBeVisible();
+  await page.keyboard.press('Shift+Tab'); await expect(dialog.getByRole('button', { name: 'Remover rascunho', exact: true })).toBeFocused();
+  await page.keyboard.press('Escape'); await expect(dialog).not.toBeVisible(); await expect(remove).toBeFocused();
+  await remove.click(); await dialog.getByRole('button', { name: 'Cancelar' }).click(); await expect(remove).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await remove.click(); await expect(dialog).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: 'test-results/delete-draft-mobile.png', fullPage: true });
+  await page.route(`**/api/posts/${id}`, async route => {
+    if (route.request().method() === 'DELETE') await route.fulfill({ status: 409, json: { error: 'O conteúdo mudou. Reabra o post.' } }); else await route.continue();
+  });
+  await dialog.getByRole('button', { name: 'Remover rascunho', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toContainText('O conteúdo mudou'); await expect(remove).toBeVisible();
+  await page.unroute(`**/api/posts/${id}`);
+  await dialog.getByRole('button', { name: 'Remover rascunho', exact: true }).click();
+  await expect(dialog).not.toBeVisible(); await expect(remove).toHaveCount(0);
+  await expect(page.getByRole('status')).toContainText('Rascunho removido');
+  await expect(page.getByRole('button', { name: 'Gerar agora' })).toBeFocused();
+  await page.reload(); await expect(remove).toHaveCount(0);
+  const persisted = openDb(path.resolve('.local-data', 'browser-tests'));
+  try { expect(persisted.prepare('SELECT 1 FROM posts WHERE id=?').get(id)).toBeUndefined(); expect(persisted.prepare('SELECT status FROM posts WHERE id=?').get(approvedId)).toEqual({ status: 'aprovado' }); } finally { persisted.close(); }
+  await page.route('**/api/generate', async route => { expect(route.request().postDataJSON()).toEqual({}); await route.fulfill({ status: 202, json: { message: 'Geração iniciada.' } }); });
+  await page.getByRole('button', { name: 'Gerar agora' }).click(); await expect(page.getByRole('heading', { name: 'Execuções.' })).toBeVisible();
+  expect(errors).toEqual([]);
 });

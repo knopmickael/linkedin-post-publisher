@@ -2,7 +2,7 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 
 export default defineConfig({
-  root: 'web', plugins: [react()],
+  root: 'web', envDir: '..', plugins: [react()],
   build: { outDir: '../public', emptyOutDir: true },
   server: { proxy: { '/api': 'http://127.0.0.1:4317', '/auth': 'http://127.0.0.1:4317' } },
 });

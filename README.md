@@ -92,7 +92,20 @@ A aplicação inicializa uploads em `/rest/images`, envia os bytes e cria um pos
 
 ## Geração manual
 
-Você decide quando gerar cada rascunho: use **Gerar agora** no painel ou o comando `generate` da CLI. Não há geração automática por horário. A quantidade de imagens pode ser definida no painel ou por `--count` na CLI. O histórico editorial fica no SQLite.
+Você decide quando gerar cada rascunho: use **Gerar agora** no painel ou o comando `generate` da CLI. Não há geração automática por horário. No painel, a geração começa com imagem única; escolha formato e quantidade de imagens na seção **Imagens do post** do editor. Na CLI, também é possível usar `--count`. O histórico editorial fica no SQLite.
+
+Para remover um post ainda em **Rascunho**, use a lixeira no canto superior direito do card em Publicações e confirme no modal. A listagem e os contadores são atualizados após a exclusão. A execução de geração permanece no histórico, sem link para o rascunho removido.
+
+### Foco de pesquisa
+
+- **AI / inteligência artificial:** novos modelos, empresas, lançamentos, ferramentas, agentes, pesquisa, chips, infraestrutura, custos, adoção, parcerias, aquisições, investimentos e novidades relevantes para desenvolvedores e/ou investidores.
+- **Cloud, System Design, arquitetura de software, performance e escalabilidade.**
+
+A seleção exige uma notícia verificável dos últimos sete dias com impacto técnico ou de mercado dentro desses temas. Fontes primárias têm preferência para anúncios e dados; cobertura jornalística complementa o contexto de empresas e mercado.
+
+Os feeds iniciais incluem OpenAI, Google DeepMind, Hugging Face, NVIDIA, TechCrunch AI, AWS, Google Cloud, AWS Architecture, Cloudflare e Netflix Engineering. A coleta consulta até três artigos recentes por feed e percorre todas as fontes habilitadas para dar espaço aos diferentes temas.
+
+Na primeira inicialização após esta atualização, uma migração desabilita os feeds anteriores e ativa o novo conjunto, substituindo completamente o foco antigo. Os registros dos feeds e o histórico de posts são preservados. Alterações posteriores nos feeds continuam sob controle do usuário em Configurações; a migração não é reaplicada.
 
 ## CLI e backup
 

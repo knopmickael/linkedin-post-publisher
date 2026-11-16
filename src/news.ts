@@ -21,7 +21,7 @@ export async function collect(db: Db, onProgress: (detail: string) => void) {
     onProgress(`Coletando ${feed.name}`);
     try {
       const xml = await publicText(feed.url); const parsed = await parser.parseString(xml.text);
-      const items = parsed.items.filter(i => i.link && recentDate(i.isoDate ?? i.pubDate)).slice(0, 8);
+      const items = parsed.items.filter(i => i.link && recentDate(i.isoDate ?? i.pubDate)).slice(0, 3);
       for (const item of items) {
         try {
           const originalUrl = new URL(item.link!, feed.url).toString();
@@ -39,7 +39,6 @@ export async function collect(db: Db, onProgress: (detail: string) => void) {
         } catch { /* A bad article does not prevent other sources from being considered. */ }
       }
     } catch (error) { failures.push(`${feed.name}: ${message(error)}`); }
-    if (candidates.length >= 20) break;
   }
   return { candidates, failures, enabledFeeds: feeds.length };
 }

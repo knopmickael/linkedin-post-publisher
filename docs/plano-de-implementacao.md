@@ -69,7 +69,7 @@ Configuração variável validada na inicialização. Segredos em armazenamento 
 
 Sem pauta verificável: execução concluída como `sem_pauta`, sem post. Falhas de coleta, autenticação, cota e validação têm diagnóstico próprio. A interface deve continuar permitindo trabalhar em conteúdo existente.
 
-Fontes iniciais propostas: blogs/notas de versão oficiais de Java/OpenJDK, Spring, AWS, Kubernetes e ferramentas selecionadas. URLs de feeds e qualidade de suas datas ainda serão verificadas. Busca web só complementa a coleta quando disponível.
+Foco de pesquisa: AI (novos modelos, empresas e toda novidade relevante para desenvolvedores e/ou investidores), Cloud, System Design, arquitetura de software, performance e escalabilidade. Fontes iniciais: OpenAI, Google DeepMind, Hugging Face, NVIDIA, TechCrunch AI, AWS, Google Cloud, AWS Architecture, Cloudflare e Netflix Engineering. Priorizar fontes primárias para anúncios e dados; complementar o contexto de empresas e mercado com cobertura jornalística. A disponibilidade e as datas dos feeds são verificadas em cada coleta. Busca web só complementa a coleta quando disponível.
 
 Deduplicação:
 

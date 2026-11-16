@@ -4,8 +4,8 @@ Atue em modo de planejamento. Proponha uma aplicação web local para Windows qu
 
 - A geração é iniciada exclusivamente pelo usuário, pelo botão **Gerar agora** ou pela CLI. Não há geração automática por horário.
 - Colete notícias dos últimos sete dias corridos. Use RSS, os feeds de novas publicações dos sites, e priorize blogs oficiais, documentação e notas de versão. Se o ambiente de geração tiver busca web, use-a para complementar a coleta e verificar a notícia na fonte original.
-- Priorize Java, Spring Boot, AWS, Kubernetes, arquitetura de software e ferramentas de desenvolvimento. Escolha uma notícia com impacto prático. Evite repetir a mesma pauta, mesmo quando sites diferentes cobrirem o assunto. Se faltar uma notícia verificável, registre a execução sem gerar post.
-- Gere um texto pronto para revisão com uma abertura direta, o que mudou, um efeito concreto para quem desenvolve ou opera software e o link da fonte ao final. Use um tom técnico e natural, sem inventar experiências pessoais, números ou citações.
+- O foco de pesquisa é AI (inteligência artificial), Cloud, System Design, arquitetura de software, performance e escalabilidade. AI abrange novos modelos, empresas, lançamentos, ferramentas, agentes, pesquisa, infraestrutura, chips, custos, adoção e movimentos de mercado: tudo que seja relevante para desenvolvedores e/ou investidores. Esse foco substitui completamente os temas anteriores, sem preferência por linguagem, framework ou fornecedor. Escolha uma notícia com impacto técnico ou de mercado concreto. Evite repetir a mesma pauta, mesmo quando sites diferentes cobrirem o assunto. Se faltar uma notícia verificável dentro desse foco, registre a execução sem gerar post.
+- Gere um texto pronto para revisão com uma abertura direta, o que mudou, um efeito concreto para desenvolvedores e/ou investidores conforme a notícia e o link da fonte ao final. Use um tom técnico e natural, sem inventar experiências pessoais, números, citações ou previsões de retorno financeiro.
 
 **2. Uso do ChatGPT Plus — regra revisada em 16/11/2026**
 

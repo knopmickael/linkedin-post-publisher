@@ -16,7 +16,7 @@ import type { Config } from './config.js';
 import { AppError, message } from './errors.js';
 import { models } from './openai.js';
 import { generate } from './generation.js';
-import { addMedia, approve, editable, getPost, mediaBytes, renderImage, replaceMedia, touch } from './posts.js';
+import { addMedia, approve, deleteDraft, editable, getPost, mediaBytes, renderImage, replaceMedia, touch } from './posts.js';
 import { publish } from './linkedin.js';
 
 const idSchema = z.string().uuid();
@@ -55,9 +55,14 @@ export async function createApp(config: Config) {
     hasImageKey: !!db.prepare("SELECT 1 FROM secrets WHERE key='imageApiKey'").get(), hasLinkedinConfig: !!db.prepare("SELECT 1 FROM secrets WHERE key='linkedinConfig'").get(),
     callback: `${config.origin}/auth/linkedin/callback`, dataDir: config.dataDir, timezone: 'America/Sao_Paulo',
   }));
-  app.get('/api/posts', async () => { recover(db); return db.prepare('SELECT p.id,p.edited_text,p.format,p.status,p.created_at,p.updated_at,n.title,(SELECT id FROM media WHERE post_id=p.id ORDER BY position LIMIT 1) AS thumbnail FROM posts p JOIN news n ON n.id=p.news_id ORDER BY p.created_at DESC').all(); });
+  app.get('/api/posts', async () => { recover(db); return db.prepare('SELECT p.id,p.edited_text,p.format,p.status,p.revision,p.created_at,p.updated_at,n.title,(SELECT id FROM media WHERE post_id=p.id ORDER BY position LIMIT 1) AS thumbnail FROM posts p JOIN news n ON n.id=p.news_id ORDER BY p.created_at DESC').all(); });
   app.get('/api/runs', async () => db.prepare('SELECT * FROM runs ORDER BY started_at DESC LIMIT 100').all());
   app.get('/api/posts/:id', async request => { recover(db); return getPost(db, idSchema.parse((request.params as { id: string }).id)); });
+  app.delete('/api/posts/:id', async request => {
+    const id = idSchema.parse((request.params as { id: string }).id);
+    deleteDraft(db, id, revisionSchema.parse(request.body).revision);
+    return { message: 'Rascunho removido.' };
+  });
   app.post('/api/generate', async (request, reply) => {
     const { count } = z.object({ count: z.number().int().min(1).max(20).default(1) }).parse(request.body);
     // Preflight is read-only. The real service still checks all invariants under its lease.

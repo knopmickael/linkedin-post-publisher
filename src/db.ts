@@ -25,17 +25,25 @@ export function openDb(dataDir: string) {
     CREATE INDEX IF NOT EXISTS post_history ON posts(created_at DESC);
     INSERT OR IGNORE INTO migrations VALUES (1, datetime('now'));
   `);
-  if (!setting(db, 'feedsInitialized', false) && !db.prepare('SELECT 1 FROM feeds LIMIT 1').get()) {
-    const add = db.prepare('INSERT INTO feeds(name,url,priority) VALUES (?,?,?)');
+  if (!db.prepare('SELECT 1 FROM migrations WHERE version=2').get()) {
+    const add = db.prepare('INSERT INTO feeds(name,url,priority,enabled) VALUES (?,?,?,1) ON CONFLICT(url) DO UPDATE SET name=excluded.name,priority=excluded.priority,enabled=1');
     db.transaction(() => {
-      add.run('Spring Blog', 'https://spring.io/blog.atom', 3);
+      // Replace the previous research focus once; later feed edits remain user-controlled.
+      db.prepare('UPDATE feeds SET enabled=0').run();
+      add.run('OpenAI — novidades e modelos', 'https://openai.com/news/rss.xml', 3);
+      add.run('Google DeepMind', 'https://deepmind.google/blog/rss.xml', 3);
+      add.run('Hugging Face — AI para desenvolvedores', 'https://huggingface.co/blog/feed.xml', 3);
+      add.run('NVIDIA — AI, empresas e infraestrutura', 'https://blogs.nvidia.com/feed/', 3);
+      add.run('TechCrunch — AI e mercado', 'https://techcrunch.com/category/artificial-intelligence/feed/', 3);
       add.run('AWS — novidades', 'https://aws.amazon.com/about-aws/whats-new/recent/feed/', 3);
-      add.run('Kubernetes Blog', 'https://kubernetes.io/feed.xml', 3);
-      add.run('Inside Java', 'https://inside.java/feed.xml', 3);
-      add.run('GitHub Blog — ferramentas', 'https://github.blog/changelog/feed/', 1);
+      add.run('Google Cloud', 'https://cloud.google.com/blog/products/rss', 3);
+      add.run('AWS — arquitetura e escalabilidade', 'https://aws.amazon.com/blogs/architecture/feed/', 3);
+      add.run('Cloudflare — sistemas e performance', 'https://blog.cloudflare.com/rss/', 3);
+      add.run('Netflix — engenharia e system design', 'https://netflixtechblog.com/feed', 3);
+      setSetting(db, 'feedsInitialized', true);
+      db.prepare("INSERT INTO migrations VALUES (2, datetime('now'))").run();
     })();
   }
-  setSetting(db, 'feedsInitialized', true);
   return db;
 }
 export type Db = ReturnType<typeof openDb>;

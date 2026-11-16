@@ -35,6 +35,26 @@ test('SSRF bloqueia loopback, IPv6 mapeado, rede privada e metadados', async () 
 test('lease exclui outra execução, pode ser renovada e recuperada', async () => {
   const f = await fixture(); try { const l = lease(f.db, 'generation'); assert.throws(() => lease(f.db, 'generation'), /andamento/); l.renew(); l.release(); const second = lease(f.db, 'generation'); second.release(); } finally { await f.close(); }
 });
+test('migração substitui feeds antigos uma vez e preserva histórico e edições posteriores', async () => {
+  const f = await fixture(); let db = f.db;
+  try {
+    const postId = seedPost(db);
+    db.prepare('DELETE FROM migrations WHERE version=2').run();
+    db.prepare('DELETE FROM feeds').run();
+    db.prepare('INSERT INTO feeds(name,url,priority) VALUES (?,?,?)').run('Spring Blog', 'https://spring.io/blog.atom', 3);
+    db.prepare('INSERT INTO feeds(name,url,priority) VALUES (?,?,?)').run('Fonte anterior personalizada', 'https://example.com/old-feed', 1);
+    db.close(); db = openDb(f.dir);
+    assert.equal((db.prepare("SELECT count(*) AS total FROM feeds WHERE enabled=1").get() as { total: number }).total, 10);
+    assert.equal((db.prepare("SELECT count(*) AS total FROM feeds WHERE enabled=0").get() as { total: number }).total, 2);
+    assert.equal(getPost(db, postId).status, 'rascunho');
+    db.prepare("UPDATE feeds SET enabled=0,priority=1 WHERE url='https://openai.com/news/rss.xml'").run();
+    db.prepare('DELETE FROM feeds WHERE url=?').run('https://deepmind.google/blog/rss.xml');
+    db.close(); db = openDb(f.dir);
+    assert.deepEqual(db.prepare("SELECT enabled,priority FROM feeds WHERE url='https://openai.com/news/rss.xml'").get(), { enabled: 0, priority: 1 });
+    assert.equal(db.prepare('SELECT 1 FROM feeds WHERE url=?').get('https://deepmind.google/blog/rss.xml'), undefined);
+    assert.equal(getPost(db, postId).status, 'rascunho');
+  } finally { db.close(); await fs.rm(f.dir, { recursive: true, force: true }); }
+});
 test('aprovação exige quantidade, alt e revisão; alterações invalidam aprovação', async () => {
   const f = await fixture(); try {
     const id = seedPost(f.db); assert.throws(() => approve(f.db, id, 1), /exige/);

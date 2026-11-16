@@ -28,7 +28,7 @@ Este registro preserva as recomendações feitas na análise. “Proposta” nã
 | D16 | Recuperar uma execução diária perdida quando possível, sem acumular dias | Política recomendada, ainda sujeita à confirmação; não prometer execução com computador desligado |
 | D17 | Janela móvel dos últimos sete dias, referenciada em `America/Sao_Paulo` | Interpretação proposta de “sete dias corridos”; confirmar se o usuário prefere dias civis |
 | D18 | RSS como base; busca web complementar quando disponível | A execução não depende de disponibilidade de busca; verificar sempre a fonte original |
-| D19 | Priorizar fontes oficiais e impacto prático | Temas: Java, Spring Boot, AWS, Kubernetes, arquitetura e ferramentas de desenvolvimento |
+| D19 | Priorizar fontes primárias e impacto técnico ou de mercado | Temas: AI em toda a sua abrangência relevante para desenvolvedores e/ou investidores, Cloud, System Design, arquitetura de software, performance e escalabilidade. Cobertura jornalística complementa o contexto de empresas e mercado |
 | D20 | Sem notícia verificável, registrar execução sem criar post | Evitar geração artificial ou factualidade insuficiente |
 | D21 | Deduplicar URL, evento e similaridade editorial | Evitar repetir uma pauta coberta por veículos diferentes |
 | D22 | Um post por pauta no escopo inicial | Restrição persistida; eventual reutilização editorial exigirá decisão futura |
