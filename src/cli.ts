@@ -8,11 +8,11 @@ import { Auth } from './auth.js';
 import { generate } from './generation.js';
 import { message } from './errors.js';
 
-const { values, positionals } = parseArgs({ allowPositionals: true, options: { 'data-dir': { type: 'string' }, count: { type: 'string', default: '1' }, from: { type: 'string' }, help: { type: 'boolean' } } });
+const { values, positionals } = parseArgs({ allowPositionals: true, options: { 'data-dir': { type: 'string' }, count: { type: 'string', default: '1' }, subject: { type: 'string' }, from: { type: 'string' }, help: { type: 'boolean' } } });
 if (values['data-dir']) process.env.APP_DATA_DIR = path.resolve(values['data-dir']);
 const command = positionals[0];
 if (values.help || !command) {
-  console.log('Uso: node dist/cli.js <generate|backup|restore|status> [--data-dir PATH] [--count 1..20] [--from BACKUP]');
+  console.log('Uso: node dist/cli.js <generate|backup|restore|status> [--data-dir PATH] [--count 1..20] [--subject "ASSUNTO"] [--from BACKUP]');
 } else {
   const config = loadConfig();
   try {
@@ -33,7 +33,7 @@ if (values.help || !command) {
         recover(db);
         if (command === 'generate') {
           const count = Number(values.count); if (!Number.isInteger(count) || count < 1 || count > 20) throw new Error('Quantidade de imagens deve estar entre 1 e 20.');
-          const result = await generate(db, auth, count);
+          const result = await generate(db, auth, count, values.subject);
           console.log(JSON.stringify({ event: 'generation_finished', ...result }));
         } else if (command === 'backup') {
           const backupDir = path.join(config.dataDir, 'backups', new Date().toISOString().replace(/[:.]/g, '-'));

@@ -94,6 +94,10 @@ A aplicação inicializa uploads em `/rest/images`, envia os bytes e cria um pos
 
 Você decide quando gerar cada rascunho: use **Gerar agora** no painel ou o comando `generate` da CLI. Não há geração automática por horário. No painel, a geração começa com imagem única; escolha formato e quantidade de imagens na seção **Imagens do post** do editor. Na CLI, também é possível usar `--count`. O histórico editorial fica no SQLite.
 
+O campo **Assunto da publicação (opcional)** permite direcionar cada geração, com até 500 caracteres. Preencha o assunto e clique em **Gerar agora** (ou pressione Enter no campo). O modelo selecionará uma notícia relacionada ao assunto e produzirá o texto e os conceitos visuais com esse foco, substituindo os temas predefinidos apenas nessa execução. O assunto fica registrado na aba **Execuções**.
+
+Se o campo estiver vazio ou contiver somente espaços, a pesquisa mantém os assuntos predefinidos abaixo. A coleta continua usando os feeds habilitados e notícias verificáveis dos últimos sete dias. Se não houver notícia adequada ao assunto informado, o resultado será **Sem pauta**, sem gerar conteúdo sobre outro tema. Para assuntos fora da cobertura atual, adicione fontes relevantes em **Configurações → Fontes de notícias**.
+
 Para remover uma publicação em qualquer estado (**Rascunho**, **Aprovado**, **Publicando**, **Publicado** ou **Falha**), use a lixeira no canto superior direito do card em Publicações e confirme no modal. A exclusão remove o registro local; não exclui nem cancela o envio de um post no LinkedIn. A listagem e os contadores são atualizados após a exclusão. A execução de geração permanece no histórico, sem link para a publicação removida.
 
 ### Foco de pesquisa
@@ -111,6 +115,7 @@ Na primeira inicialização após esta atualização, uma migração desabilita 
 
 ```powershell
 node dist/cli.js generate --count 3
+node dist/cli.js generate --subject "Agentes de IA no desenvolvimento de software"
 node dist/cli.js status
 node dist/cli.js backup
 ```

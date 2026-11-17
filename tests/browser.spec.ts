@@ -5,6 +5,55 @@ import { openDb } from '../src/db.js';
 import { seedPost } from './helpers.js';
 import { loadEnv } from 'vite';
 
+test('assunto opcional direciona a geração e campo vazio mantém os assuntos predefinidos', async ({ page }) => {
+  const errors: string[] = [], failures: string[] = [];
+  page.on('pageerror', error => errors.push(error.message));
+  page.on('requestfailed', request => failures.push(request.url()));
+  const payloads: object[] = [];
+  let subject: string | null = null, fail = false;
+  await page.route('**/api/runs', route => route.fulfill({ json: payloads.length ? [{ id: 'subject-run', status: 'sem_pauta', stage: 'concluido', subject, started_at: new Date().toISOString(), detail: 'Nenhuma notícia adequada nas fontes consultadas.' }] : [] }));
+  await page.route('**/api/generate', async route => {
+    const payload = route.request().postDataJSON();
+    if (fail) { await route.fulfill({ status: 409, json: { error: 'Geração já em andamento.' } }); return; }
+    payloads.push(payload); subject = payload.subject ?? null;
+    await route.fulfill({ status: 202, json: { message: 'Geração iniciada.' } });
+  });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.goto('/');
+  await expect(page.getByRole('heading', { name: 'Suas publicações.' })).toBeVisible();
+  expect(await page.locator('main').ariaSnapshot()).toContain('Assunto da publicação (opcional)');
+  const input = page.getByRole('textbox', { name: 'Assunto da publicação (opcional)', exact: true });
+  await expect(input).toHaveAttribute('maxlength', '500');
+  await expect(page.locator('#generation-subject-help')).toContainText('Se deixar em branco');
+  await input.fill('  Agentes de IA no desenvolvimento  ');
+  await page.screenshot({ path: 'test-results/subject-desktop.png' });
+  await input.press('Enter');
+  await expect(page.getByRole('heading', { name: 'Execuções.' })).toBeVisible();
+  await expect(page.locator('.run-subject')).toHaveText('Assunto: Agentes de IA no desenvolvimento');
+  expect(payloads).toEqual([{ subject: 'Agentes de IA no desenvolvimento' }]);
+  await page.getByRole('button', { name: /Publicações/ }).click();
+  await expect(input).toHaveValue('');
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(input).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: 'test-results/subject-mobile.png' });
+  for (const value of ['', '   ']) {
+    await input.fill(value);
+    await page.getByRole('button', { name: 'Gerar agora' }).click();
+    await expect(page.getByRole('heading', { name: 'Execuções.' })).toBeVisible();
+    await expect(page.locator('.run-subject')).toContainText('Assuntos predefinidos do sistema');
+    await page.getByRole('button', { name: /Publicações/ }).click();
+  }
+  expect(payloads).toEqual([{ subject: 'Agentes de IA no desenvolvimento' }, {}, {}]);
+  fail = true;
+  await input.fill('Cloud e escalabilidade');
+  await page.getByRole('button', { name: 'Gerar agora' }).click();
+  await expect(page.getByRole('alert')).toContainText('Geração já em andamento.');
+  await expect(input).toHaveValue('Cloud e escalabilidade');
+  await expect(page.getByRole('button', { name: 'Gerar agora' })).toBeEnabled();
+  expect(errors).toEqual([]); expect(failures).toEqual([]);
+});
+
 test('lixeira remove publicações de todos os estados sem acessar o LinkedIn', async ({ page }) => {
   const db = openDb(path.resolve('.local-data', 'browser-tests'));
   const posts = ['rascunho', 'aprovado', 'publicando', 'publicado', 'falha'].map(status => {

@@ -4,5 +4,5 @@ export type Summary = { id: string; title: string; edited_text: string; format: 
 export type Media = { id: string; alt_text: string; overlay_text: string; position: number; width: number; height: number; sha256: string };
 export type Attempt = { id: string; outcome: string; stage: string; detail?: string; started_at: string };
 export type Post = Summary & { generated_text: string; revision: number; approved_revision: number | null; canonical_url: string; published_at: string; evidence: string; published_url: string | null; media: Media[]; attempts: Attempt[]; visual: { visualConcept: string; desiredCount: number; slides: Array<{ purpose: string; imagePrompt: string; overlayText: string; altText: string }> } };
-export type Run = { id: string; trigger: string; status: string; stage: string; detail?: string; started_at: string; finished_at?: string; post_id?: string };
+export type Run = { id: string; trigger: string; status: string; stage: string; subject?: string | null; detail?: string; started_at: string; finished_at?: string; post_id?: string };
 export type Feed = { id: number; name: string; url: string; priority: number; enabled: number };

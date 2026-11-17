@@ -15,7 +15,7 @@ import { Auth } from './auth.js';
 import type { Config } from './config.js';
 import { AppError, message } from './errors.js';
 import { models } from './openai.js';
-import { generate } from './generation.js';
+import { generate, generationSchema } from './generation.js';
 import { addMedia, approve, deletePost, editable, getPost, mediaBytes, renderImage, replaceMedia, touch } from './posts.js';
 import { publish } from './linkedin.js';
 
@@ -64,10 +64,10 @@ export async function createApp(config: Config) {
     return { message: 'Publicação removida da aplicação.' };
   });
   app.post('/api/generate', async (request, reply) => {
-    const { count } = z.object({ count: z.number().int().min(1).max(20).default(1) }).parse(request.body);
+    const { count, subject } = generationSchema.parse(request.body);
     // Preflight is read-only. The real service still checks all invariants under its lease.
     if (db.prepare("SELECT 1 FROM leases WHERE name='generation' AND expires_at>?").get(Date.now())) throw new AppError('Geração já em andamento.', 409);
-    const job = generate(db, auth, count).catch(error => { console.error(JSON.stringify({ event: 'generation_failed', message: message(error) })); }).finally(() => jobs.delete(job)); jobs.add(job);
+    const job = generate(db, auth, count, subject).catch(error => { console.error(JSON.stringify({ event: 'generation_failed', message: message(error) })); }).finally(() => jobs.delete(job)); jobs.add(job);
     reply.code(202); return { message: 'Geração iniciada. Acompanhe na aba Execuções.' };
   });
   app.patch('/api/posts/:id', async request => {

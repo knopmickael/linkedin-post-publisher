@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { z } from 'zod';
 import type { Db } from './db.js';
 import { lease, setting } from './db.js';
 import type { Auth } from './auth.js';
@@ -6,16 +7,22 @@ import { collect } from './news.js';
 import { editorial } from './openai.js';
 import { message } from './errors.js';
 
+export const generationSchema = z.object({
+  count: z.number().int().min(1).max(20).default(1),
+  subject: z.string().trim().max(500).optional().transform(value => value || undefined),
+});
+
 export function similarEvent(title: string, previous: string) {
   const words = (s: string) => new Set(s.toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '').match(/[a-z0-9]+(?:\.[0-9]+)*/g)?.filter(w => w.length > 2) ?? []);
   const a = words(title), b = words(previous); const intersection = [...a].filter(x => b.has(x)).length;
   return intersection >= 4 && intersection / Math.min(a.size, b.size) >= 0.75;
 }
-export async function generate(db: Db, auth: Auth, count = 1) {
+export async function generate(db: Db, auth: Auth, count = 1, requestedSubject?: string) {
+  const { subject } = generationSchema.parse({ count, subject: requestedSubject });
   const lock = lease(db, 'generation', 120); const id = randomUUID();
   const heartbeat = setInterval(() => { try { lock.renew(); } catch { /* Checked before commit. */ } }, 30000);
   try {
-    db.prepare('INSERT INTO runs(id,trigger,started_at,status,stage) VALUES (?,?,?,?,?)').run(id, 'manual', new Date().toISOString(), 'executando', 'autenticacao');
+    db.prepare('INSERT INTO runs(id,trigger,started_at,status,stage,subject) VALUES (?,?,?,?,?,?)').run(id, 'manual', new Date().toISOString(), 'executando', 'autenticacao', subject ?? null);
     const progress = (stage: string, detail: string) => db.prepare('UPDATE runs SET stage=?,detail=? WHERE id=?').run(stage, detail, id);
     await auth.access('openai');
     const model = setting(db, 'model', '');
@@ -24,15 +31,15 @@ export async function generate(db: Db, auth: Auth, count = 1) {
     const historyRows = db.prepare('SELECT event_key,title FROM topics WHERE id IN (SELECT topic_id FROM posts)').all() as Array<{ event_key: string; title: string }>;
     const fresh = candidates.filter(c => !historyRows.some(h => similarEvent(c.title, h.title)));
     if (!fresh.length) {
-      const detail = !enabledFeeds ? 'Nenhum feed habilitado.' : `Nenhuma pauta verificável e inédita nos últimos sete dias.${failures.length ? ` Falhas: ${failures.join(' | ')}` : ''}`;
+      const detail = !enabledFeeds ? 'Nenhum feed habilitado.' : `Nenhuma pauta verificável e inédita nos últimos sete dias${subject ? ' para pesquisar o assunto informado' : ''}.${failures.length ? ` Falhas: ${failures.join(' | ')}` : ''}`;
       db.prepare('UPDATE runs SET status=?,stage=?,detail=?,finished_at=? WHERE id=?').run(failures.length === enabledFeeds && enabledFeeds > 0 ? 'falha' : 'sem_pauta', 'concluido', detail, new Date().toISOString(), id);
       return { id, status: 'sem_pauta' };
     }
-    progress('geracao', `Selecionando entre ${fresh.length} fontes verificadas. Imagens serão importadas manualmente.`);
-    const result = await editorial(auth, model, fresh, historyRows.map(h => `${h.event_key}: ${h.title}`), count);
+    progress('geracao', `Selecionando entre ${fresh.length} fontes verificadas${subject ? ' para o assunto informado' : ' nos assuntos predefinidos'}. Imagens serão importadas manualmente.`);
+    const result = await editorial(auth, model, fresh, historyRows.map(h => `${h.event_key}: ${h.title}`), count, subject);
     lock.renew();
     if (!result || historyRows.some(h => h.event_key === result.eventKey)) {
-      db.prepare('UPDATE runs SET status=?,stage=?,detail=?,finished_at=? WHERE id=?').run('sem_pauta', 'concluido', 'Seleção não identificou uma pauta inédita adequada.', new Date().toISOString(), id);
+      db.prepare('UPDATE runs SET status=?,stage=?,detail=?,finished_at=? WHERE id=?').run('sem_pauta', 'concluido', subject ? 'Nenhuma notícia verificável e inédita adequada ao assunto informado nas fontes consultadas. Tente outro assunto ou revise os feeds habilitados.' : 'Seleção não identificou uma pauta inédita adequada.', new Date().toISOString(), id);
       return { id, status: 'sem_pauta' };
     }
     const source = fresh.find(s => s.id === result.sourceId)!; const postId = randomUUID(); const topicId = randomUUID(); const now = new Date().toISOString();

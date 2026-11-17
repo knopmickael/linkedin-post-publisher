@@ -44,6 +44,12 @@ export function openDb(dataDir: string) {
       db.prepare("INSERT INTO migrations VALUES (2, datetime('now'))").run();
     })();
   }
+  if (!db.prepare('SELECT 1 FROM migrations WHERE version=3').get()) {
+    db.transaction(() => {
+      db.exec('ALTER TABLE runs ADD COLUMN subject TEXT');
+      db.prepare("INSERT INTO migrations VALUES (3, datetime('now'))").run();
+    })();
+  }
   return db;
 }
 export type Db = ReturnType<typeof openDb>;
