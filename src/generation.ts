@@ -4,29 +4,41 @@ import type { Db } from './db.js';
 import { lease, setting } from './db.js';
 import type { Auth } from './auth.js';
 import { collect } from './news.js';
-import { editorial } from './openai.js';
+import { editorial, informative } from './openai.js';
 import { message } from './errors.js';
 
 export const generationSchema = z.object({
   count: z.number().int().min(1).max(20).default(1),
   subject: z.string().trim().max(500).optional().transform(value => value || undefined),
-});
+  mode: z.enum(['news', 'informative']).default('news'),
+}).refine(value => value.mode !== 'informative' || !!value.subject, { path: ['subject'], message: 'Informe o assunto para dissertar.' });
 
 export function similarEvent(title: string, previous: string) {
   const words = (s: string) => new Set(s.toLowerCase().normalize('NFD').replace(/\p{Diacritic}/gu, '').match(/[a-z0-9]+(?:\.[0-9]+)*/g)?.filter(w => w.length > 2) ?? []);
   const a = words(title), b = words(previous); const intersection = [...a].filter(x => b.has(x)).length;
   return intersection >= 4 && intersection / Math.min(a.size, b.size) >= 0.75;
 }
-export async function generate(db: Db, auth: Auth, count = 1, requestedSubject?: string) {
-  const { subject } = generationSchema.parse({ count, subject: requestedSubject });
+export async function generate(db: Db, auth: Auth, count = 1, requestedSubject?: string, mode: 'news' | 'informative' = 'news') {
+  const { subject } = generationSchema.parse({ count, subject: requestedSubject, mode });
   const lock = lease(db, 'generation', 120); const id = randomUUID();
   const heartbeat = setInterval(() => { try { lock.renew(); } catch { /* Checked before commit. */ } }, 30000);
   try {
-    db.prepare('INSERT INTO runs(id,trigger,started_at,status,stage,subject) VALUES (?,?,?,?,?,?)').run(id, 'manual', new Date().toISOString(), 'executando', 'autenticacao', subject ?? null);
+    db.prepare('INSERT INTO runs(id,trigger,started_at,status,stage,subject,mode) VALUES (?,?,?,?,?,?,?)').run(id, 'manual', new Date().toISOString(), 'executando', 'autenticacao', subject ?? null, mode);
     const progress = (stage: string, detail: string) => db.prepare('UPDATE runs SET stage=?,detail=? WHERE id=?').run(stage, detail, id);
     await auth.access('openai');
     const model = setting(db, 'model', '');
     if (!model) throw new Error('Selecione e salve um modelo na aba Configurações.');
+    if (mode === 'informative') {
+      progress('geracao', 'Criando conteúdo informativo sobre o assunto, com sugestões de hashtags.');
+      const result = await informative(auth, model, subject!, count);
+      lock.renew();
+      const postId = randomUUID(), now = new Date().toISOString();
+      db.transaction(() => {
+        db.prepare(`INSERT INTO posts(id,title,mode,run_id,generated_text,edited_text,format,status,visual_json,created_at,updated_at) VALUES (?,?,'informative',?,?,?,?,'rascunho',?,?,?)`).run(postId, result.title, id, result.text, result.text, count === 1 ? 'single' : 'gallery', JSON.stringify({ ...result, desiredCount: count }), now, now);
+        db.prepare("UPDATE runs SET status='concluido',stage='concluido',detail=?,post_id=?,finished_at=? WHERE id=?").run('Rascunho informativo criado. Revise o texto e as hashtags.', postId, now, id);
+      })();
+      return { id, status: 'concluido', postId };
+    }
     const { candidates, failures, enabledFeeds } = await collect(db, detail => progress('coleta', detail));
     const historyRows = db.prepare('SELECT event_key,title FROM topics WHERE id IN (SELECT topic_id FROM posts)').all() as Array<{ event_key: string; title: string }>;
     const fresh = candidates.filter(c => !historyRows.some(h => similarEvent(c.title, h.title)));

@@ -76,3 +76,22 @@ test('exclusão aceita todos os estados com revisão atual e remove dependência
     assert.equal((db.prepare('SELECT count(*) AS total FROM topics').get() as { total: number }).total, 1);
   } finally { await app.close(); await fs.rm(dir, { recursive: true, force: true }); }
 });
+
+test('remover mídia após falha de publicação elimina cache sem perder a tentativa', async () => {
+  const base = process.env.TEMP ? path.join(process.env.TEMP, 'opencode') : '/tmp'; const dir = await fs.mkdtemp(path.join(base, 'publisher-remove-upload-')); await fs.mkdir(path.join(dir, 'media'));
+  const { app, db } = await createApp({ port: 4317, origin: 'http://127.0.0.1:4317', dataDir: dir, https: undefined });
+  try {
+    const id = seedPost(db); const bytes = await sharp({ create: { width: 32, height: 32, channels: 3, background: 'blue' } }).png().toBuffer();
+    const mid = await addMedia(db, dir, id, 1, bytes, 'Arte');
+    const attempt = randomUUID(); db.prepare('INSERT INTO attempts(id,post_id,revision,snapshot,stage,outcome,started_at) VALUES (?,?,?,?,?,?,?)').run(attempt, id, 2, '{"media":"snapshot preservado"}', 'uploading', 'failed', new Date().toISOString());
+    db.prepare('INSERT INTO uploads VALUES (?,?,?,?,?)').run(randomUUID(), attempt, mid, 'urn:li:image:cached', 'uploaded');
+    const session = await app.inject({ url: '/api/session', headers: { host: '127.0.0.1:4317' } });
+    const headers = { host: '127.0.0.1:4317', origin: 'http://127.0.0.1:4317', cookie: `publisher=${session.cookies[0].value}`, 'x-csrf-token': session.json().csrf };
+    const response = await app.inject({ method: 'DELETE', url: `/api/posts/${id}/media/${mid}`, headers, payload: { revision: 2 } });
+    assert.equal(response.statusCode, 200, response.body);
+    assert.equal(response.json().media.length, 0);
+    assert.deepEqual(db.prepare('SELECT snapshot FROM attempts WHERE id=?').get(attempt), { snapshot: '{"media":"snapshot preservado"}' });
+    assert.equal(db.prepare('SELECT 1 FROM uploads WHERE media_id=?').get(mid), undefined);
+    assert.deepEqual(db.pragma('foreign_key_check'), []);
+  } finally { await app.close(); await fs.rm(dir, { recursive: true, force: true }); }
+});

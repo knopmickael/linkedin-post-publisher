@@ -9,6 +9,8 @@ import fsp from 'node:fs/promises';
 import path from 'node:path';
 import { ZipFile } from 'yazl';
 import OpenAI from 'openai';
+import { pipeline } from 'node:stream/promises';
+import type { Readable } from 'node:stream';
 import { openDb, recover, setting, setSetting, lease } from './db.js';
 import { Vault } from './vault.js';
 import { Auth } from './auth.js';
@@ -16,7 +18,8 @@ import type { Config } from './config.js';
 import { AppError, message } from './errors.js';
 import { models } from './openai.js';
 import { generate, generationSchema } from './generation.js';
-import { addMedia, approve, deletePost, editable, getPost, mediaBytes, renderImage, replaceMedia, touch } from './posts.js';
+import { addMedia, addVideoFile, approve, createManualPost, deletePost, editable, getPost, mediaBytes, renderImage, replaceMedia, touch, validateMediaFormat } from './posts.js';
+import { byteRange, imageLimit, mediaPath, videoLimit } from './media.js';
 import { publish } from './linkedin.js';
 
 const idSchema = z.string().uuid();
@@ -27,13 +30,13 @@ const feedSchema = z.object({ name: z.string().trim().min(1).max(100), url: z.st
 export async function createApp(config: Config) {
   const db = openDb(config.dataDir); recover(db); const vault = new Vault(db); const auth = new Auth(db, vault, config);
   const app = Fastify({ logger: false, bodyLimit: 256000, ...(config.https ? { https: config.https } : {}) });
-  await app.register(cookie); await app.register(multipart, { limits: { fileSize: 20 * 1024 * 1024, files: 1, fields: 3, parts: 4 } });
+  await app.register(cookie); await app.register(multipart, { limits: { fileSize: videoLimit, files: 1, fields: 3, parts: 4 } });
   const session = randomBytes(32).toString('hex'), csrf = randomBytes(32).toString('hex');
   const jobs = new Set<Promise<unknown>>();
   const same = (a: unknown, b: string) => typeof a === 'string' && a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
   const allowedHosts = new Set([new URL(config.origin).host, `127.0.0.1:${config.port}`, `localhost:${config.port}`]);
   app.addHook('onRequest', async (request, reply) => {
-    reply.header('X-Content-Type-Options', 'nosniff').header('Referrer-Policy', 'no-referrer').header('Cache-Control', 'no-store').header('Content-Security-Policy', "default-src 'self'; img-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
+    reply.header('X-Content-Type-Options', 'nosniff').header('Referrer-Policy', 'no-referrer').header('Cache-Control', 'no-store').header('Content-Security-Policy', "default-src 'self'; img-src 'self' blob:; media-src 'self' blob:; style-src 'self' 'unsafe-inline'; script-src 'self'; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
     if (!allowedHosts.has(request.headers.host ?? '')) throw new AppError('Host não permitido.', 403);
     const route = request.routeOptions.url ?? request.url;
     if (route.startsWith('/api/') && route !== '/api/session' && !same(request.cookies.publisher, session)) throw new AppError('Sessão local expirada. Recarregue o painel.', 401);
@@ -45,7 +48,7 @@ export async function createApp(config: Config) {
     if (error instanceof ZodError) { reply.code(400).send({ error: 'Dados inválidos.', details: error.issues.map(i => `${i.path.join('.')}: ${i.message}`).slice(0, 8) }); return; }
     const known = error instanceof AppError;
     const statusCode = typeof error === 'object' && error && 'statusCode' in error ? Number(error.statusCode) : 500;
-    reply.code(known ? error.status : (statusCode === 413 ? 413 : 500)).send({ error: known ? error.message : statusCode === 413 ? 'Arquivo muito grande. Limite: 20 MB.' : 'Não foi possível concluir a operação. Confira os dados e tente novamente.', code: known ? error.code : 'internal_error' });
+    reply.code(known ? error.status : (statusCode === 413 ? 413 : 500)).send({ error: known ? error.message : statusCode === 413 ? 'Arquivo muito grande. Limite: 500 MB para vídeo; 20 MB para imagem ou GIF.' : 'Não foi possível concluir a operação. Confira os dados e tente novamente.', code: known ? error.code : 'internal_error' });
   });
   app.get('/api/session', async (_request, reply) => { reply.setCookie('publisher', session, { httpOnly: true, sameSite: 'strict', secure: !!config.https, path: '/' }); return { csrf, origin: config.origin }; });
   app.get('/api/status', async () => ({
@@ -55,7 +58,11 @@ export async function createApp(config: Config) {
     hasImageKey: !!db.prepare("SELECT 1 FROM secrets WHERE key='imageApiKey'").get(), hasLinkedinConfig: !!db.prepare("SELECT 1 FROM secrets WHERE key='linkedinConfig'").get(),
     callback: `${config.origin}/auth/linkedin/callback`, dataDir: config.dataDir, timezone: 'America/Sao_Paulo',
   }));
-  app.get('/api/posts', async () => { recover(db); return db.prepare('SELECT p.id,p.edited_text,p.format,p.status,p.revision,p.created_at,p.updated_at,n.title,(SELECT id FROM media WHERE post_id=p.id ORDER BY position LIMIT 1) AS thumbnail FROM posts p JOIN news n ON n.id=p.news_id ORDER BY p.created_at DESC').all(); });
+  app.get('/api/posts', async () => { recover(db); return db.prepare("SELECT p.id,p.edited_text,p.format,p.mode,p.status,p.revision,p.created_at,p.updated_at,COALESCE(NULLIF(p.title,''),n.title,'Publicação') AS title,(SELECT id FROM media WHERE post_id=p.id ORDER BY position LIMIT 1) AS thumbnail,(SELECT kind FROM media WHERE post_id=p.id ORDER BY position LIMIT 1) AS thumbnail_kind FROM posts p LEFT JOIN news n ON n.id=p.news_id ORDER BY p.created_at DESC").all(); });
+  app.post('/api/posts', async (request, reply) => {
+    const { subject } = z.object({ subject: z.string().trim().max(500).optional() }).parse(request.body ?? {});
+    const id = createManualPost(db, subject); reply.code(201); return getPost(db, id);
+  });
   app.get('/api/runs', async () => db.prepare('SELECT * FROM runs ORDER BY started_at DESC LIMIT 100').all());
   app.get('/api/posts/:id', async request => { recover(db); return getPost(db, idSchema.parse((request.params as { id: string }).id)); });
   app.delete('/api/posts/:id', async request => {
@@ -64,17 +71,17 @@ export async function createApp(config: Config) {
     return { message: 'Publicação removida da aplicação.' };
   });
   app.post('/api/generate', async (request, reply) => {
-    const { count, subject } = generationSchema.parse(request.body);
+    const { count, subject, mode } = generationSchema.parse(request.body);
     // Preflight is read-only. The real service still checks all invariants under its lease.
     if (db.prepare("SELECT 1 FROM leases WHERE name='generation' AND expires_at>?").get(Date.now())) throw new AppError('Geração já em andamento.', 409);
-    const job = generate(db, auth, count, subject).catch(error => { console.error(JSON.stringify({ event: 'generation_failed', message: message(error) })); }).finally(() => jobs.delete(job)); jobs.add(job);
+    const job = generate(db, auth, count, subject, mode).catch(error => { console.error(JSON.stringify({ event: 'generation_failed', message: message(error) })); }).finally(() => jobs.delete(job)); jobs.add(job);
     reply.code(202); return { message: 'Geração iniciada. Acompanhe na aba Execuções.' };
   });
   app.patch('/api/posts/:id', async request => {
     const id = idSchema.parse((request.params as { id: string }).id);
-    const body = revisionSchema.extend({ text: z.string().trim().min(1).max(3000), format: z.enum(['single', 'gallery']), count: z.number().int().min(1).max(20) }).parse(request.body);
-    if ((body.format === 'single' && body.count !== 1) || (body.format === 'gallery' && body.count < 2)) throw new AppError('Quantidade incompatível com o formato.');
-    db.transaction(() => { const post = editable(db, id, body.revision); post.visual.desiredCount = body.count;
+    const body = revisionSchema.extend({ text: z.string().trim().max(3000), format: z.enum(['text', 'single', 'gallery', 'gif', 'video']), count: z.number().int().min(0).max(20) }).parse(request.body);
+    if ((body.format === 'text' && body.count !== 0) || (['single', 'gif', 'video'].includes(body.format) && body.count !== 1) || (body.format === 'gallery' && body.count < 2)) throw new AppError('Quantidade incompatível com o formato.');
+    db.transaction(() => { const post = editable(db, id, body.revision); validateMediaFormat(body.format, post.media); post.visual.desiredCount = body.count;
       db.prepare('UPDATE posts SET edited_text=?,format=?,visual_json=? WHERE id=?').run(body.text, body.format, JSON.stringify(post.visual), id); touch(db, id);
     })(); return getPost(db, id);
   });
@@ -97,31 +104,56 @@ export async function createApp(config: Config) {
       }
     })(); } finally { lock.release(); } return getPost(db, id);
   });
-  app.post('/api/posts/:id/media', async request => {
-    const id = idSchema.parse((request.params as { id: string }).id); const part = await request.file();
-    if (!part) throw new AppError('Escolha uma imagem.');
-    const bytes = await part.toBuffer(); if (part.file.truncated) throw new AppError('Limite de 20 MB por imagem.');
-    const fields = part.fields as Record<string, { value?: unknown }>;
-    const revision = z.coerce.number().int().positive().parse(fields.revision?.value);
-    const alt = z.string().max(1000).parse(fields.altText?.value ?? '');
-    await addMedia(db, config.dataDir, id, revision, bytes, alt); return getPost(db, id);
-  });
+  async function importMedia(request: import('fastify').FastifyRequest, id: string, replaceId?: string) {
+    const part = await request.file();
+    if (!part) throw new AppError('Escolha uma imagem, GIF ou vídeo MP4.');
+    await fsp.mkdir(path.join(config.dataDir, 'media'), { recursive: true });
+    const temporary = path.join(config.dataDir, 'media', `${randomUUID()}.upload`);
+    try {
+      await pipeline(part.file, fs.createWriteStream(temporary, { flags: 'wx' }));
+      if (part.file.truncated) throw new AppError('Limite de 500 MB por vídeo.');
+      const fields = part.fields as Record<string, { value?: unknown }>;
+      const revision = z.coerce.number().int().positive().parse(fields.revision?.value);
+      const alt = z.string().max(1000).parse(fields.altText?.value ?? '');
+      editable(db, id, revision);
+      const handle = await fsp.open(temporary, 'r'), header = Buffer.alloc(12);
+      try { await handle.read(header, 0, 12, 0); } finally { await handle.close(); }
+      if (header.subarray(4, 8).toString('ascii') === 'ftyp') await addVideoFile(db, config.dataDir, id, revision, temporary, alt, replaceId);
+      else {
+        if ((await fsp.stat(temporary)).size > imageLimit) throw new AppError('Limite de 20 MB por imagem ou GIF.');
+        const bytes = await fsp.readFile(temporary);
+        if (replaceId) await replaceMedia(db, config.dataDir, id, replaceId, revision, bytes);
+        else await addMedia(db, config.dataDir, id, revision, bytes, alt);
+      }
+      return getPost(db, id);
+    } finally { await fsp.rm(temporary, { force: true }); }
+  }
+  app.post('/api/posts/:id/media', async request => importMedia(request, idSchema.parse((request.params as { id: string }).id)));
   app.get('/api/media/:id', async (request, reply) => {
-    const row = db.prepare('SELECT path FROM media WHERE id=?').get(idSchema.parse((request.params as { id: string }).id)) as { path: string } | undefined;
-    if (!row) throw new AppError('Imagem não encontrada.', 404); reply.type('image/png'); return mediaBytes(config.dataDir, row.path);
+    const row = db.prepare('SELECT path,mime_type FROM media WHERE id=?').get(idSchema.parse((request.params as { id: string }).id)) as { path: string; mime_type: string } | undefined;
+    if (!row) throw new AppError('Mídia não encontrada.', 404);
+    const file = mediaPath(config.dataDir, row.path), { size } = await fsp.stat(file);
+    reply.type(row.mime_type).header('Accept-Ranges', 'bytes');
+    if (request.headers.range) {
+      const range = byteRange(request.headers.range, size);
+      if (!range) return reply.code(416).header('Content-Range', `bytes */${size}`).send();
+      return reply.code(206).header('Content-Range', `bytes ${range.start}-${range.end}/${size}`).header('Content-Length', range.end - range.start + 1).send(fs.createReadStream(file, range));
+    }
+    return reply.header('Content-Length', size).send(fs.createReadStream(file));
   });
   app.post('/api/posts/:id/media/:mediaId/replace', async request => {
-    const { id, mediaId } = z.object({ id: idSchema, mediaId: idSchema }).parse(request.params); const part = await request.file();
-    if (!part) throw new AppError('Escolha uma imagem.');
-    const bytes = await part.toBuffer(); if (part.file.truncated) throw new AppError('Limite de 20 MB por imagem.');
-    const fields = part.fields as Record<string, { value?: unknown }>;
-    await replaceMedia(db, config.dataDir, id, mediaId, z.coerce.number().int().positive().parse(fields.revision?.value), bytes);
-    return getPost(db, id);
+    const { id, mediaId } = z.object({ id: idSchema, mediaId: idSchema }).parse(request.params);
+    return importMedia(request, id, mediaId);
   });
   app.patch('/api/posts/:id/media/:mediaId', async request => {
     const { id, mediaId } = z.object({ id: idSchema, mediaId: idSchema }).parse(request.params);
     const body = revisionSchema.extend({ altText: z.string().max(1000), overlayText: z.string().max(140) }).parse(request.body);
     const post = editable(db, id, body.revision); const media = post.media.find(m => m.id === mediaId); if (!media) throw new AppError('Imagem não encontrada.', 404);
+    if (media.kind !== 'image') {
+      if (body.overlayText.trim()) throw new AppError('Título aplicado na arte só está disponível para imagem estática.');
+      db.transaction(() => { editable(db, id, body.revision); db.prepare('UPDATE media SET alt_text=? WHERE id=? AND post_id=?').run(body.altText, mediaId, id); touch(db, id); })();
+      return getPost(db, id);
+    }
     const rendered = await renderImage(await mediaBytes(config.dataDir, media.original_path), body.overlayText); const file = `media/${randomUUID()}.png`;
     await fsp.writeFile(path.join(config.dataDir, file), rendered.data, { flag: 'wx' });
     db.transaction(() => { editable(db, id, body.revision); db.prepare('UPDATE media SET alt_text=?,overlay_text=?,path=?,sha256=?,size=?,width=?,height=? WHERE id=?').run(body.altText, body.overlayText, file, createHash('sha256').update(rendered.data).digest('hex'), rendered.data.length, rendered.info.width, rendered.info.height, mediaId); touch(db, id); })();
@@ -129,7 +161,13 @@ export async function createApp(config: Config) {
   });
   app.delete('/api/posts/:id/media/:mediaId', async request => {
     const { id, mediaId } = z.object({ id: idSchema, mediaId: idSchema }).parse(request.params); const { revision } = revisionSchema.parse(request.body);
-    db.transaction(() => { editable(db, id, revision); if (!db.prepare('DELETE FROM media WHERE id=? AND post_id=?').run(mediaId, id).changes) throw new AppError('Imagem não encontrada.', 404); touch(db, id); })(); return getPost(db, id);
+    db.transaction(() => {
+      const post = editable(db, id, revision);
+      if (!post.media.some(m => m.id === mediaId)) throw new AppError('Mídia não encontrada.', 404);
+      // Attempts retain their immutable snapshots; removed media can no longer reuse its upload cache.
+      db.prepare('DELETE FROM uploads WHERE media_id=?').run(mediaId);
+      db.prepare('DELETE FROM media WHERE id=? AND post_id=?').run(mediaId, id); touch(db, id);
+    })(); return getPost(db, id);
   });
   app.post('/api/posts/:id/reorder', async request => {
     const id = idSchema.parse((request.params as { id: string }).id); const body = revisionSchema.extend({ ids: z.array(idSchema).min(1).max(20) }).parse(request.body);
@@ -139,9 +177,12 @@ export async function createApp(config: Config) {
   });
   app.get('/api/posts/:id/export', async (request, reply) => {
     const id = idSchema.parse((request.params as { id: string }).id); const post = getPost(db, id); const archive = new ZipFile();
+    // yazl emits on the archive itself, not its output stream; forward before any asynchronous stat/read.
+    archive.on('error', error => (archive.outputStream as Readable).destroy(error));
     reply.type('application/zip').header('Content-Disposition', `attachment; filename="post-${id}.zip"`);
-    archive.addBuffer(Buffer.from(post.edited_text), 'texto.txt'); archive.addBuffer(Buffer.from(JSON.stringify({ source: post.canonical_url, format: post.format, images: post.media.map((m, i) => ({ file: `${String(i + 1).padStart(2, '0')}.png`, altText: m.alt_text })) }, null, 2)), 'descricao-e-fonte.json');
-    for (const [i, media] of post.media.entries()) archive.addBuffer(await mediaBytes(config.dataDir, media.path), `${String(i + 1).padStart(2, '0')}.png`);
+    const filename = (i: number, kind: string) => `${String(i + 1).padStart(2, '0')}.${kind === 'video' ? 'mp4' : kind === 'gif' ? 'gif' : 'png'}`;
+    archive.addBuffer(Buffer.from(post.edited_text), 'texto.txt'); archive.addBuffer(Buffer.from(JSON.stringify({ source: post.canonical_url, format: post.format, media: post.media.map((m, i) => ({ file: filename(i, m.kind), kind: m.kind, mimeType: m.mime_type, altText: m.alt_text })) }, null, 2)), 'descricao-e-fonte.json');
+    for (const [i, media] of post.media.entries()) archive.addFile(mediaPath(config.dataDir, media.path), filename(i, media.kind));
     archive.end(); return reply.send(archive.outputStream);
   });
   app.get('/api/feeds', async () => db.prepare('SELECT * FROM feeds ORDER BY priority DESC,name').all());
@@ -179,7 +220,9 @@ export async function createApp(config: Config) {
     const key = await vault.get<{ key: string }>('imageApiKey'); if (!key) throw new AppError('Configure uma API key para imagens.');
     const lock = lease(db, `image:${id}`, 180);
     try {
-      const post = editable(db, id, b.revision); if (post.media.length >= 20 && !b.replaceId) throw new AppError('Limite de imagens atingido.');
+      const post = editable(db, id, b.revision);
+      if (!['single', 'gallery'].includes(post.format)) throw new AppError('Escolha um formato de imagem estática para gerar arte.');
+      if (post.media.length >= (post.format === 'single' ? 1 : 20) && !b.replaceId) throw new AppError('Limite de imagens atingido.');
       if (b.replaceId && !post.media.some(m => m.id === b.replaceId)) throw new AppError('Imagem a substituir não encontrada.');
       const client = new OpenAI({ apiKey: key.key, maxRetries: 0, timeout: 150000 });
       const result = await client.images.generate({ model: setting(db, 'imageModel', 'gpt-image-1'), prompt: b.prompt, n: 1, size: '1024x1024' }, { signal: AbortSignal.timeout(150000) });

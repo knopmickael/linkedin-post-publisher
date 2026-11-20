@@ -1,6 +1,6 @@
 # Publica · LinkedIn Post Publisher
 
-Aplicação local para Windows: pesquisa RSS, rascunhos técnicos em português, revisão de texto e imagens e publicação no **perfil pessoal** do LinkedIn. Imagem única ou galeria de 2 a 20 imagens. **Sem PDF e sem Codex local.**
+Aplicação local para Windows: notícias de tecnologia e segurança via RSS, conteúdo informativo por IA ou escrita manual, revisão e publicação no **perfil pessoal** do LinkedIn. Somente texto, imagem única, galeria de 2 a 20 imagens, GIF animado ou vídeo MP4. **Sem PDF e sem Codex local.**
 
 ## Requisitos
 
@@ -44,11 +44,23 @@ O fluxo implementa registro dinâmico oficial, host ID persistente, PKCE, state,
 
 **Plus não inclui uma API key convencional.** O SDK recebe um token OAuth para Responses com `store:false` e `stream:true`. A geração só termina quando chega `response.completed` e o JSON editorial é validado.
 
-### Imagens
+### Imagens, GIFs e vídeos
 
-A modalidade atual de compartilhamento da cota não suporta geração de imagens. O rascunho oferece conceitos/prompts para copiar e usar no ChatGPT. Baixe as imagens e importe no painel. O editor aceita JPG, PNG e WebP estáticos, até 20 MB por arquivo; converte para PNG, ajusta dimensões e remove metadados.
+A modalidade atual de compartilhamento da cota não suporta geração de imagens. Os rascunhos com IA oferecem conceitos/prompts para copiar e usar no ChatGPT. Baixe as imagens e importe no painel. JPG, PNG e WebP estáticos aceitam até 20 MiB por arquivo; são convertidos para PNG, com dimensões ajustadas e metadados removidos.
 
-Importe a quantidade configurada no post, preencha as descrições alternativas e, se desejar, aplique um título curto na montagem final. Salve cada alteração de imagem. Há ações de ordenação, remoção e prompt para substituição. PDF não é aceito nem gerado.
+Na seção **Mídias do post**, escolha o formato e importe a quantidade configurada. Imagens estáticas e GIFs exigem descrição alternativa para aprovação. Imagens estáticas permitem títulos curtos na arte e reordenação na galeria. GIFs mantêm a animação e não recebem overlay. PDF não é aceito nem gerado.
+
+| Formato | Limites adotados |
+| --- | --- |
+| Somente texto | 1 a 3.000 caracteres para aprovar; sem arquivo |
+| Imagem única | 1 JPG/PNG/WebP; até 20 MiB de entrada |
+| Galeria | 2 a 20 imagens estáticas |
+| GIF animado | 1 GIF; até 20 MiB (limite local), no máximo 250 quadros, menos de 36.152.320 pixels por quadro/canvas |
+| Vídeo | 1 MP4 com trilha de vídeo; 75.000 a 500.000.000 bytes; 3 segundos a 30 minutos |
+
+GIF e vídeo são mídias únicas, sem mistura com galerias. Para mudar de tipo, remova primeiro os arquivos incompatíveis. O servidor verifica o conteúdo real, independentemente do nome/MIME enviado pelo navegador. MP4 é inspecionado com `mp4box`, sem FFmpeg, transcodificação ou extração de amostras. Upload e envio de vídeo usam arquivos/fluxos; a prévia suporta requisições Range. A descrição do vídeo é uma referência local, não uma legenda nem um campo altText enviado à API.
+
+Os limites de GIF vêm da [Images API](https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/images-api). Para MP4, a aplicação adota os **500 MB conservadores** da seção de especificações da [Videos API](https://learn.microsoft.com/en-us/linkedin/marketing/community-management/shares/videos-api), embora o campo de inicialização também mencione um teto maior. Compatibilidade de codec/processamento é confirmada pelo LinkedIn antes da criação do post. Não há geração de vídeo por IA.
 
 Opcional: em Configurações, habilite **API paga de imagens**, informe uma chave da API Platform e salve. Esse caminho tem cobrança independente; cada geração/regeneração exige confirmação. O padrão é desativado, sem fallback de cobrança.
 
@@ -78,38 +90,47 @@ Abra `https://localhost:4317` e cadastre `https://localhost:4317/auth/linkedin/c
 
 ### Publicar e validar os formatos
 
-1. Abra o rascunho, revise fonte/texto e importe as imagens.
-2. Escolha imagem única (1) ou galeria (2 a 20), defina a quantidade e salve.
-3. Salve descrições/títulos das imagens. Confira a prévia aproximada.
+1. Abra o rascunho e revise texto, hashtags e fonte (quando houver).
+2. Escolha somente texto, imagem única, galeria, GIF ou vídeo; defina a quantidade quando aplicável e salve.
+3. Importe as mídias, salve descrições/títulos disponíveis para o tipo e confira a prévia aproximada.
 4. Clique **Aprovar revisão**.
 5. Clique **Publicar no LinkedIn** e confirme. Este é o único caminho de criação de posts remotos.
 
-A aplicação inicializa uploads em `/rest/images`, envia os bytes e cria um post em `/rest/posts` com autor pessoal. Registra a URN retornada e marca o formato como validado somente após sucesso real. A versão da API é configurável; padrão inicial `202610`.
+A aplicação inicializa imagens/GIFs em `/rest/images`. Para vídeo, inicializa em `/rest/videos`, envia as partes indicadas, reúne os ETags e finaliza o upload. Consulta a disponibilidade do vídeo antes de criar o post. Somente texto omite `content`. A criação usa `/rest/posts` com autor pessoal, registra a URN retornada e marca o formato como validado somente após sucesso real. A versão da API é configurável; padrão inicial `202610`.
 
-`w_member_social` pode não permitir GET de status da imagem; o fluxo não exige polling proibido. Se a criação for recusada porque a imagem ainda está processando, aguarde, aprove novamente e tente pelo botão: uploads confirmados da mesma revisão são reaproveitados. Permissões/formatos não autorizados aparecem como erro; use **Exportar texto e imagens (.zip)** para publicação manual.
+`w_member_social` pode não permitir GET de status da imagem; o fluxo não exige essa leitura para imagens/GIFs. Se uma mídia ainda estiver processando, aguarde, aprove novamente e tente pelo botão: uploads finalizados da mesma revisão são reaproveitados. Para vídeo, recusa da consulta de processamento é apresentada antes da criação, sem presumir permissões. Permissões/formatos não autorizados aparecem como erro; use **Exportar texto e mídias (.zip)** para publicação manual. O ZIP preserva PNG/GIF/MP4 e suas descrições.
 
 **Resultado incerto:** timeout, erro de servidor ou interrupção após início da criação bloqueiam novo envio. Confira o perfil, depois registre no painel a URL do post encontrado ou confirme sua ausência. Não há retry automático de criação. Uma edição invalida a aprovação. Posts publicados não são editados remotamente por este produto.
 
-## Geração manual
+## Criar uma publicação
 
-Você decide quando gerar cada rascunho: use **Gerar agora** no painel ou o comando `generate` da CLI. Não há geração automática por horário. No painel, a geração começa com imagem única; escolha formato e quantidade de imagens na seção **Imagens do post** do editor. Na CLI, também é possível usar `--count`. O histórico editorial fica no SQLite.
+Você decide quando criar cada rascunho. **Gerar agora** abre um modal com o assunto acima de três opções:
 
-O campo **Assunto da publicação (opcional)** permite direcionar cada geração, com até 500 caracteres. Preencha o assunto e clique em **Gerar agora** (ou pressione Enter no campo). O modelo selecionará uma notícia relacionada ao assunto e produzirá o texto e os conceitos visuais com esse foco, substituindo os temas predefinidos apenas nessa execução. O assunto fica registrado na aba **Execuções**.
+- **Gerar notícia (IA):** pesquisa notícia verificável dos últimos sete dias e cria texto com fonte e três hashtags.
+- **Manual:** cria um rascunho vazio imediatamente e abre o editor, sem conexão com IA. O assunto é opcional e pode servir como título inicial. O texto pode ser salvo vazio, mas só é aprovado quando preenchido.
+- **Dissertar (IA):** exige assunto e gera conteúdo informativo e didático, como tópicos e aplicações de Kubernetes, com três hashtags. Não exige RSS nem inventa uma notícia ou fonte.
 
-Se o campo estiver vazio ou contiver somente espaços, a pesquisa mantém os assuntos predefinidos abaixo. A coleta continua usando os feeds habilitados e notícias verificáveis dos últimos sete dias. Se não houver notícia adequada ao assunto informado, o resultado será **Sem pauta**, sem gerar conteúdo sobre outro tema. Para assuntos fora da cobertura atual, adicione fontes relevantes em **Configurações → Fontes de notícias**.
+As hashtags fazem parte do corpo editável e contam para o limite de 3.000 caracteres. Os modos com IA criam execuções acompanháveis na aba **Execuções**; Manual continua disponível mesmo durante outra geração. Nenhum conteúdo é publicado automaticamente.
+
+As opções com IA começam com imagem única; Manual começa com somente texto. Altere formato e quantidade em **Mídias do post**. A CLI `generate` continua gerando notícias e aceita `--count`. O histórico editorial fica no SQLite.
+
+O campo **Assunto da publicação** fica dentro do modal e aceita até 500 caracteres. Em **Gerar notícia**, ele é opcional: o modelo seleciona uma notícia relacionada e produz texto/conceitos visuais nesse foco, substituindo os temas predefinidos apenas nessa execução. Em **Dissertar**, o assunto é obrigatório. O assunto e o modo ficam registrados na aba **Execuções**. Enter no campo inicia a opção de notícia quando habilitada.
+
+Para notícia, campo vazio ou somente espaços mantém os assuntos predefinidos abaixo. A coleta usa feeds habilitados e notícias verificáveis dos últimos sete dias. Se não houver notícia adequada ao assunto informado, o resultado será **Sem pauta**, sem trocar de tema. Para assuntos fora da cobertura, adicione fontes em **Configurações → Fontes de notícias**. Esse requisito de recência não se aplica a Dissertar.
 
 Para remover uma publicação em qualquer estado (**Rascunho**, **Aprovado**, **Publicando**, **Publicado** ou **Falha**), use a lixeira no canto superior direito do card em Publicações e confirme no modal. A exclusão remove o registro local; não exclui nem cancela o envio de um post no LinkedIn. A listagem e os contadores são atualizados após a exclusão. A execução de geração permanece no histórico, sem link para a publicação removida.
 
 ### Foco de pesquisa
 
-- **AI / inteligência artificial:** novos modelos, empresas, lançamentos, ferramentas, agentes, pesquisa, chips, infraestrutura, custos, adoção, parcerias, aquisições, investimentos e novidades relevantes para desenvolvedores e/ou investidores.
-- **Cloud, System Design, arquitetura de software, performance e escalabilidade.**
+- **Notícias do mundo da tecnologia em primeiro lugar:** software, hardware, sistemas operacionais, serviços, empresas e infraestrutura.
+- **Grande destaque para novas vulnerabilidades**, falhas críticas, exploração confirmada e correções de segurança. CVE, gravidade, versões afetadas e mitigação só entram quando sustentados pela fonte.
+- **AI / inteligência artificial, Cloud, System Design, arquitetura de software, performance e escalabilidade** continuam cobertos, sem exclusividade.
 
 A seleção exige uma notícia verificável dos últimos sete dias com impacto técnico ou de mercado dentro desses temas. Fontes primárias têm preferência para anúncios e dados; cobertura jornalística complementa o contexto de empresas e mercado.
 
-Os feeds iniciais incluem OpenAI, Google DeepMind, Hugging Face, NVIDIA, TechCrunch AI, AWS, Google Cloud, AWS Architecture, Cloudflare e Netflix Engineering. A coleta consulta até três artigos recentes por feed e percorre todas as fontes habilitadas para dar espaço aos diferentes temas.
+Os feeds incluem CERT-EU e BleepingComputer (prioridade inicial 5), Ars Technica (4), OpenAI, Google DeepMind, Hugging Face, NVIDIA, TechCrunch AI, AWS, Google Cloud, AWS Architecture, Cloudflare e Netflix Engineering. A coleta consulta até três artigos recentes por feed e percorre todas as fontes habilitadas. A prioridade orienta a seleção editorial, sem dispensar verificação e relevância.
 
-Na primeira inicialização após esta atualização, uma migração desabilita os feeds anteriores e ativa o novo conjunto, substituindo completamente o foco antigo. Os registros dos feeds e o histórico de posts são preservados. Alterações posteriores nos feeds continuam sob controle do usuário em Configurações; a migração não é reaplicada.
+Uma migração adiciona as três novas fontes de tecnologia/segurança **sem desabilitar nem reconfigurar fontes existentes**. Ela não se reaplica; alterações posteriores permanecem sob controle do usuário. A migração de publicações preserva IDs, revisões, aprovações, histórico e uploads antigos, permitindo novos rascunhos sem notícia associada.
 
 ## CLI e backup
 

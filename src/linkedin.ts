@@ -1,15 +1,17 @@
-import { randomUUID, createHash } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
 import type { Db } from './db.js';
 import { lease, setting, setSetting } from './db.js';
 import type { Auth } from './auth.js';
 import { AppError, message } from './errors.js';
-import { getPost, mediaBytes, snapshot } from './posts.js';
+import { getPost, snapshot } from './posts.js';
+import { fileHash, mediaPath } from './media.js';
+import { uploadAsset, waitForVideo } from './linkedin-media.js';
 
 export function linkedinBody(author: string, text: string, images: Array<{ id: string; altText: string }>) {
   return {
     author, commentary: text.replace(/([\\{}@\[\]()<>#*_~|])/g, '\\$1'), visibility: 'PUBLIC',
     distribution: { feedDistribution: 'MAIN_FEED', targetEntities: [], thirdPartyDistributionChannels: [] },
-    content: images.length === 1 ? { media: images[0] } : { multiImage: { images } },
+    ...(images.length ? { content: images.length === 1 ? { media: images[0].id.startsWith('urn:li:video:') ? { id: images[0].id } : images[0] } : { multiImage: { images } } } : {}),
     lifecycleState: 'PUBLISHED', isReshareDisabledByAuthor: false,
   };
 }
@@ -22,8 +24,7 @@ export async function publish(db: Db, auth: Auth, dataDir: string, postId: strin
     const token = await auth.access('linkedin'); const post = getPost(db, postId);
     if (post.status !== 'aprovado' || post.approved_revision !== revision || post.revision !== revision) throw new AppError('Aprove a revisão atual antes de publicar.', 409);
     for (const media of post.media) {
-      const bytes = await mediaBytes(dataDir, media.path);
-      if (createHash('sha256').update(bytes).digest('hex') !== media.sha256) throw new AppError('Arquivo mudou após a aprovação. Importe a imagem novamente.');
+      if (await fileHash(mediaPath(dataDir, media.path)) !== media.sha256) throw new AppError('Arquivo mudou após a aprovação. Importe a mídia novamente.');
     }
     db.transaction(() => {
       const current = getPost(db, postId);
@@ -39,17 +40,13 @@ export async function publish(db: Db, auth: Auth, dataDir: string, postId: strin
       const reused = db.prepare("SELECT u.asset_urn FROM uploads u JOIN attempts a ON a.id=u.attempt_id WHERE u.media_id=? AND u.status='uploaded' AND a.post_id=? AND a.revision=? ORDER BY a.started_at DESC LIMIT 1").get(media.id, postId, revision) as { asset_urn: string } | undefined;
       let urn = reused?.asset_urn;
       if (!urn) {
-        const init = await fetch('https://api.linkedin.com/rest/images?action=initializeUpload', { method: 'POST', headers, body: JSON.stringify({ initializeUploadRequest: { owner: author } }), signal: AbortSignal.timeout(30000) });
-        if (!init.ok) throw new AppError(`LinkedIn recusou o início do upload (HTTP ${init.status}). Confira o produto Share on LinkedIn, a versão e w_member_social.`, 409);
-        const body = await init.json() as { value: { image: string; uploadUrl: string } };
-        urn = body.value?.image; const uploadUrl = new URL(body.value?.uploadUrl);
-        if (!urn?.startsWith('urn:li:image:') || uploadUrl.protocol !== 'https:' || !/(^|\.)(linkedin\.com|licdn\.com)$/.test(uploadUrl.hostname)) throw new AppError('Resposta de upload inválida do LinkedIn.');
-        const uploadId = randomUUID(); db.prepare('INSERT INTO uploads VALUES (?,?,?,?,?)').run(uploadId, attemptId, media.id, urn, 'initialized');
-        const bytes = await mediaBytes(dataDir, media.path);
-        const upload = await fetch(uploadUrl, { method: 'PUT', headers: { Authorization: `Bearer ${token.access_token}`, 'Content-Type': 'image/png' }, body: new Uint8Array(bytes), signal: AbortSignal.timeout(90000), redirect: 'error' });
-        if (!upload.ok) throw new AppError(`Upload da imagem recusado (HTTP ${upload.status}).`, 409);
+        const uploadId = randomUUID();
+        urn = await uploadAsset(headers, author, media, dataDir, assetUrn => {
+          db.prepare('INSERT INTO uploads VALUES (?,?,?,?,?)').run(uploadId, attemptId, media.id, assetUrn, 'initialized');
+        }, lock.renew);
         db.prepare("UPDATE uploads SET status='uploaded' WHERE id=?").run(uploadId);
       }
+      if (media.kind === 'video') await waitForVideo(headers, urn, lock.renew);
       images.push({ id: urn, altText: media.alt_text });
     }
     // w_member_social may not permit polling /rest/images: do not require a forbidden GET.

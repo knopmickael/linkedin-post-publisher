@@ -1,11 +1,12 @@
-Atue em modo de planejamento. Proponha uma aplicação web local para Windows que pesquise notícias de tecnologia, gere posts em português brasileiro com imagens, mantenha um histórico e publique no meu perfil pessoal do LinkedIn. Quero usar Node.js com TypeScript e SQLite, um banco armazenado em arquivo. Apresente o plano e as decisões técnicas antes de implementar.
+Aplicação web local para Windows que pesquisa notícias de tecnologia, cria posts em português brasileiro por IA ou escrita manual, mantém histórico e publica no perfil pessoal do LinkedIn. Stack: Node.js com TypeScript, React e SQLite em arquivo. Escopo atualizado em 18/11/2026 conforme desenho aprovado em `docs/superpowers/specs/2026-11-18-criacao-e-midias-design.md`.
 
 **1. Pesquisa e geração de texto**
 
-- A geração é iniciada exclusivamente pelo usuário, pelo botão **Gerar agora** ou pela CLI. Não há geração automática por horário.
+- A criação é iniciada exclusivamente pelo usuário. **Gerar agora** abre modal com assunto e três opções: **Gerar notícia (IA)**, **Manual** e **Dissertar (IA)**. Manual cria rascunho vazio imediatamente, sem IA; Dissertar exige assunto e explica conceitos e aplicações, sem depender de notícia recente. A CLI continua gerando notícias. Não há geração automática por horário.
 - Colete notícias dos últimos sete dias corridos. Use RSS, os feeds de novas publicações dos sites, e priorize blogs oficiais, documentação e notas de versão. Se o ambiente de geração tiver busca web, use-a para complementar a coleta e verificar a notícia na fonte original.
-- O foco de pesquisa é AI (inteligência artificial), Cloud, System Design, arquitetura de software, performance e escalabilidade. AI abrange novos modelos, empresas, lançamentos, ferramentas, agentes, pesquisa, infraestrutura, chips, custos, adoção e movimentos de mercado: tudo que seja relevante para desenvolvedores e/ou investidores. Esse foco substitui completamente os temas anteriores, sem preferência por linguagem, framework ou fornecedor. Escolha uma notícia com impacto técnico ou de mercado concreto. Evite repetir a mesma pauta, mesmo quando sites diferentes cobrirem o assunto. Se faltar uma notícia verificável dentro desse foco, registre a execução sem gerar post.
+- Os temas predefinidos priorizam notícias atuais do mundo da tecnologia, com grande importância para novas vulnerabilidades, falhas críticas e correções. IA, Cloud, System Design, arquitetura, performance e escalabilidade continuam contemplados, sem exclusividade. Assunto explícito substitui o foco padrão naquela geração. Evite repetir pautas; sem notícia verificável adequada, registre **Sem pauta**. Fontes novas de segurança/tecnologia são adicionadas sem substituir configurações existentes.
 - Gere um texto pronto para revisão com uma abertura direta, o que mudou, um efeito concreto para desenvolvedores e/ou investidores conforme a notícia e o link da fonte ao final. Use um tom técnico e natural, sem inventar experiências pessoais, números, citações ou previsões de retorno financeiro.
+- Os dois modos com IA geram cerca de três hashtags relevantes incorporadas ao corpo editável. O limite final, incluindo fonte e hashtags, é 3.000 caracteres. Para segurança, não inventar CVEs, gravidade, versões afetadas nem confirmação de exploração.
 
 **2. Uso do ChatGPT Plus — regra revisada em 16/11/2026**
 
@@ -14,11 +15,12 @@ Atue em modo de planejamento. Proponha uma aplicação web local para Windows qu
 - Antes de consolidar a integração, fazer uma prova de conceito de autenticação, geração de texto em JSON e renovação da sessão em execução diária não interativa. O login e o consentimento iniciais podem exigir interação no navegador; a tarefa diária não deve exigi-la.
 - Verificar texto e imagem separadamente. A documentação consultada em 16/11/2026 não suporta geração de imagem pela modalidade de compartilhamento da cota do ChatGPT. Nesse caso, permitir gerar a imagem no ChatGPT e importá-la pelo painel. Manter a API oficial de imagem como opção configurável, com cobrança separada e ativação explícita. Deixar o projeto utilizável quando o gerador estiver indisponível, a sessão expirar ou a cota acabar.
 
-**3. Imagem única ou galeria — escopo revisado**
+**3. Texto, imagens, GIFs e vídeos — escopo revisado**
 
-- Permita escolher entre **imagem única** e **galeria com várias imagens** (2 a 20). PDF e carrossel de documentos estão fora do escopo atual: não oferecer upload, montagem ou publicação de PDF. A quantidade de imagens deve ser configurável por publicação, dentro dos limites documentados do LinkedIn. Use imagem única como padrão.
+- Permita **somente texto**, **imagem única**, **galeria com 2 a 20 imagens estáticas**, **GIF animado único** ou **vídeo MP4 único**. GIF: até 20 MiB locais, 250 quadros e menos de 36.152.320 pixels por quadro/canvas. MP4: 75.000 a 500.000.000 bytes e 3 segundos a 30 minutos, com trilha de vídeo. Validar no servidor e preservar animação. Imagem única é padrão para IA, somente texto para Manual. PDF permanece fora do escopo.
 - Gere um conceito visual para a notícia. Na galeria, faça cada imagem cobrir um ponto diferente, mantendo consistência visual. Se houver títulos ou dados na arte, aplique-os na montagem final para que o texto fique legível e corresponda ao conteúdo aprovado.
 - No painel, permita visualizar, reordenar, substituir, importar e regenerar imagens individualmente. Guarde os arquivos no disco e registre no SQLite o caminho, a ordem e o texto alternativo, uma descrição para leitores de tela.
+- A seção **Mídias do post** exibe preview conforme tipo e vídeo com controles/Range. Overlay e regeneração de imagem são exclusivos de imagens estáticas. Vídeo usa upload remoto multipart e finalização antes da criação do post; ZIP preserva PNG/GIF/MP4. Não inclui geração/transcodificação de vídeo nem legendas customizadas.
 
 **4. Painel e histórico**
 

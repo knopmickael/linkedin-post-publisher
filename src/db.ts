@@ -50,6 +50,33 @@ export function openDb(dataDir: string) {
       db.prepare("INSERT INTO migrations VALUES (3, datetime('now'))").run();
     })();
   }
+  if (!db.prepare('SELECT 1 FROM migrations WHERE version=4').get()) {
+    db.pragma('foreign_keys = OFF');
+    try { db.transaction(() => {
+      db.exec(`
+        CREATE TABLE posts_new (id TEXT PRIMARY KEY, topic_id TEXT UNIQUE REFERENCES topics(id), news_id TEXT REFERENCES news(id), run_id TEXT REFERENCES runs(id), generated_text TEXT NOT NULL, edited_text TEXT NOT NULL, format TEXT NOT NULL CHECK(format IN ('text','single','gallery','gif','video')), status TEXT NOT NULL CHECK(status IN ('rascunho','aprovado','publicando','publicado','falha')), revision INTEGER NOT NULL DEFAULT 1, approved_revision INTEGER, visual_json TEXT NOT NULL, linkedin_urn TEXT, published_url TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, title TEXT NOT NULL DEFAULT '', mode TEXT NOT NULL DEFAULT 'news' CHECK(mode IN ('news','manual','informative')));
+        INSERT INTO posts_new SELECT p.*,COALESCE(n.title,'Publicação'), 'news' FROM posts p LEFT JOIN news n ON n.id=p.news_id;
+        DROP TABLE posts;
+        ALTER TABLE posts_new RENAME TO posts;
+        CREATE INDEX post_history ON posts(created_at DESC);
+        ALTER TABLE runs ADD COLUMN mode TEXT NOT NULL DEFAULT 'news';
+        ALTER TABLE media ADD COLUMN kind TEXT NOT NULL DEFAULT 'image' CHECK(kind IN ('image','gif','video'));
+        ALTER TABLE media ADD COLUMN mime_type TEXT NOT NULL DEFAULT 'image/png';
+        ALTER TABLE media ADD COLUMN duration_ms INTEGER;
+      `);
+      if ((db.pragma('foreign_key_check') as unknown[]).length) throw new AppError('Falha de integridade ao migrar publicações.');
+      db.prepare("INSERT INTO migrations VALUES (4, datetime('now'))").run();
+    })(); } finally { db.pragma('foreign_keys = ON'); }
+  }
+  if (!db.prepare('SELECT 1 FROM migrations WHERE version=5').get()) {
+    db.transaction(() => {
+      const add = db.prepare('INSERT INTO feeds(name,url,priority,enabled) VALUES (?,?,?,1) ON CONFLICT(url) DO NOTHING');
+      add.run('CERT-EU — vulnerabilidades e correções', 'https://cert.europa.eu/publications/security-advisories-rss', 5);
+      add.run('BleepingComputer — segurança e tecnologia', 'https://www.bleepingcomputer.com/feed/', 5);
+      add.run('Ars Technica — notícias de tecnologia', 'https://feeds.arstechnica.com/arstechnica/index', 4);
+      db.prepare("INSERT INTO migrations VALUES (5, datetime('now'))").run();
+    })();
+  }
   return db;
 }
 export type Db = ReturnType<typeof openDb>;

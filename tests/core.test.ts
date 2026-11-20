@@ -126,7 +126,7 @@ test('credenciais protegidas fazem roundtrip sem texto aberto no SQLite', async 
 test('OpenAI valida stream completo e rejeita limite após texto parcial sem consumir API real', async () => {
   const originalFetch = globalThis.fetch;
   const source: Candidate = { id: randomUUID(), url: 'https://spring.io/release', originalUrl: 'https://spring.io/release', title: 'Spring release', date: new Date().toISOString(), text: 'Fonte técnica verificada.', evidence: 'Teste', priority: 3 };
-  const text = JSON.stringify({ sourceId: source.id, eventKey: 'spring-new-release', text: 'Uma atualização prática do Spring altera a forma de configurar aplicações. A mudança ajuda quem desenvolve e opera software a verificar as opções disponíveis.', visualConcept: 'Ilustração técnica editorial.', slides: [{ purpose: 'Mudança', imagePrompt: 'Blocos de software', overlayText: '', altText: 'Blocos azuis' }] });
+  const text = JSON.stringify({ sourceId: source.id, eventKey: 'spring-new-release', text: 'Uma atualização prática do Spring altera a forma de configurar aplicações. A mudança ajuda quem desenvolve e opera software a verificar as opções disponíveis.', hashtags: ['Java', 'Spring', 'Software'], visualConcept: 'Ilustração técnica editorial.', slides: [{ purpose: 'Mudança', imagePrompt: 'Blocos de software', overlayText: '', altText: 'Blocos azuis' }] });
   function sse(events: object[]) { return new Response(events.map(e => `data: ${JSON.stringify(e)}\n\n`).join('') + 'data: [DONE]\n\n', { headers: { 'Content-Type': 'text/event-stream' } }); }
   try {
     globalThis.fetch = (async (_input, init) => {

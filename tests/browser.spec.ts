@@ -4,12 +4,14 @@ import sharp from 'sharp';
 import { openDb } from '../src/db.js';
 import { seedPost } from './helpers.js';
 import { loadEnv } from 'vite';
+import { animatedGif, mp4Fixture } from './media-fixtures.js';
 
-test('assunto opcional direciona a geração e campo vazio mantém os assuntos predefinidos', async ({ page }) => {
+test('modal cria notícia ou dissertação com assunto e preserva erros e foco', async ({ page }) => {
   const errors: string[] = [], failures: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
   page.on('requestfailed', request => failures.push(request.url()));
   const payloads: object[] = [];
+  await page.route('**/api/status', async route => { const response = await route.fetch(); await route.fulfill({ json: { ...await response.json(), openai: { connected: true } } }); });
   let subject: string | null = null, fail = false;
   await page.route('**/api/runs', route => route.fulfill({ json: payloads.length ? [{ id: 'subject-run', status: 'sem_pauta', stage: 'concluido', subject, started_at: new Date().toISOString(), detail: 'Nenhuma notícia adequada nas fontes consultadas.' }] : [] }));
   await page.route('**/api/generate', async route => {
@@ -21,17 +23,23 @@ test('assunto opcional direciona a geração e campo vazio mantém os assuntos p
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/');
   await expect(page.getByRole('heading', { name: 'Suas publicações.' })).toBeVisible();
-  expect(await page.locator('main').ariaSnapshot()).toContain('Assunto da publicação (opcional)');
-  const input = page.getByRole('textbox', { name: 'Assunto da publicação (opcional)', exact: true });
+  const opener = page.getByRole('button', { name: /Gerar agora/ });
+  await expect(page.getByRole('textbox', { name: /Assunto da publicação/ })).toHaveCount(0);
+  await opener.click();
+  const dialog = page.getByRole('dialog', { name: 'Nova publicação' });
+  const input = dialog.getByRole('textbox', { name: 'Assunto da publicação', exact: true });
+  await expect(input).toBeFocused();
   await expect(input).toHaveAttribute('maxlength', '500');
-  await expect(page.locator('#generation-subject-help')).toContainText('Se deixar em branco');
+  await expect(dialog).toContainText('vulnerabilidades');
+  for (const name of ['Gerar notícia (IA)', 'Manual', 'Dissertar (IA)']) await expect(dialog.getByRole('button', { name, exact: true })).toBeVisible();
   await input.fill('  Agentes de IA no desenvolvimento  ');
   await page.screenshot({ path: 'test-results/subject-desktop.png' });
   await input.press('Enter');
   await expect(page.getByRole('heading', { name: 'Execuções.' })).toBeVisible();
   await expect(page.locator('.run-subject')).toHaveText('Assunto: Agentes de IA no desenvolvimento');
-  expect(payloads).toEqual([{ subject: 'Agentes de IA no desenvolvimento' }]);
+  expect(payloads).toEqual([{ mode: 'news', subject: 'Agentes de IA no desenvolvimento' }]);
   await page.getByRole('button', { name: /Publicações/ }).click();
+  await opener.click();
   await expect(input).toHaveValue('');
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(input).toBeVisible();
@@ -39,19 +47,74 @@ test('assunto opcional direciona a geração e campo vazio mantém os assuntos p
   await page.screenshot({ path: 'test-results/subject-mobile.png' });
   for (const value of ['', '   ']) {
     await input.fill(value);
-    await page.getByRole('button', { name: 'Gerar agora' }).click();
+    await dialog.getByRole('button', { name: 'Gerar notícia (IA)', exact: true }).click();
     await expect(page.getByRole('heading', { name: 'Execuções.' })).toBeVisible();
     await expect(page.locator('.run-subject')).toContainText('Assuntos predefinidos do sistema');
     await page.getByRole('button', { name: /Publicações/ }).click();
+    await opener.click();
   }
-  expect(payloads).toEqual([{ subject: 'Agentes de IA no desenvolvimento' }, {}, {}]);
+  expect(payloads).toEqual([{ mode: 'news', subject: 'Agentes de IA no desenvolvimento' }, { mode: 'news' }, { mode: 'news' }]);
+  await dialog.getByRole('button', { name: 'Dissertar (IA)', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toContainText('Informe o assunto');
+  expect(payloads).toHaveLength(3);
+  await input.fill('Kubernetes'); await dialog.getByRole('button', { name: 'Dissertar (IA)', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Execuções.' })).toBeVisible();
+  expect(payloads[3]).toEqual({ mode: 'informative', subject: 'Kubernetes' });
+  await page.getByRole('button', { name: /Publicações/ }).click(); await opener.click();
   fail = true;
   await input.fill('Cloud e escalabilidade');
-  await page.getByRole('button', { name: 'Gerar agora' }).click();
-  await expect(page.getByRole('alert')).toContainText('Geração já em andamento.');
+  await dialog.getByRole('button', { name: 'Gerar notícia (IA)', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toContainText('Geração já em andamento.');
   await expect(input).toHaveValue('Cloud e escalabilidade');
-  await expect(page.getByRole('button', { name: 'Gerar agora' })).toBeEnabled();
+  await page.keyboard.press('Escape'); await expect(dialog).toHaveCount(0); await expect(opener).toBeFocused();
   expect(errors).toEqual([]); expect(failures).toEqual([]);
+});
+
+test('Manual funciona offline com geração em andamento e salva rascunho somente texto', async ({ page }) => {
+  await page.route('**/api/runs', route => route.fulfill({ json: [{ id: 'busy-run', status: 'executando', mode: 'news', stage: 'geracao', started_at: new Date().toISOString() }] }));
+  await page.route('**/api/status', async route => { const response = await route.fetch(); await route.fulfill({ json: { ...await response.json(), openai: { connected: false } } }); });
+  await page.goto('/'); await page.getByRole('button', { name: /Gerar agora|Gerando/ }).click();
+  const dialog = page.getByRole('dialog', { name: 'Nova publicação' });
+  await expect(dialog.getByRole('button', { name: 'Gerar notícia (IA)', exact: true })).toBeDisabled();
+  await dialog.getByLabel('Assunto da publicação', { exact: true }).fill('Manual de teste offline');
+  await dialog.getByRole('button', { name: 'Manual', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Revise e compartilhe.' })).toBeVisible();
+  await expect(page.getByLabel('Texto da publicação', { exact: true })).toHaveValue('');
+  await expect(page.getByRole('combobox', { name: 'Formato', exact: true })).toHaveValue('text');
+  await expect(page.getByRole('link', { name: 'Conferir fonte original' })).toHaveCount(0);
+  await page.getByLabel('Texto da publicação', { exact: true }).fill('Texto escrito manualmente no navegador.');
+  await page.getByRole('button', { name: /Salvar alterações/ }).click();
+  await page.getByRole('button', { name: 'Aprovar revisão' }).click();
+  await expect(page.locator('.page-heading .badge')).toHaveText('Aprovado');
+  await page.getByRole('button', { name: 'Todas as publicações' }).click();
+  await page.reload(); await page.getByRole('button', { name: /Manual de teste offline/ }).first().click();
+  await expect(page.getByLabel('Texto da publicação', { exact: true })).toHaveValue('Texto escrito manualmente no navegador.');
+});
+
+test('editor aceita GIF animado e vídeo com preview por tipo', async ({ page }) => {
+  const db = openDb(path.resolve('.local-data', 'browser-tests'));
+  const id = seedPost(db); db.prepare('UPDATE news SET title=? WHERE id=(SELECT news_id FROM posts WHERE id=?)').run(`Mídias ${id}`, id); db.close();
+  await page.goto('/'); await page.getByRole('button', { name: new RegExp(`Mídias ${id}`) }).first().click();
+  await page.getByRole('combobox', { name: 'Formato', exact: true }).selectOption('gif'); await page.getByRole('button', { name: /Salvar alterações/ }).click();
+  await expect(page.getByRole('status')).toContainText('Alterações salvas');
+  await page.locator('#images-upload').setInputFiles({ name: 'animation.gif', mimeType: 'image/gif', buffer: animatedGif() });
+  await expect(page.locator('.media-editor')).toHaveCount(1);
+  await expect(page.locator('.media-editor>img')).toBeVisible();
+  await expect(page.getByLabel('Título aplicado na arte (opcional)')).toHaveCount(0);
+  await page.getByLabel('Descrição para leitores de tela').fill('Uma animação revisada');
+  await page.getByRole('button', { name: 'Salvar mídia', exact: true }).click();
+  page.on('dialog', d => d.accept());
+  await page.getByRole('button', { name: 'Remover', exact: true }).click();
+  await expect(page.locator('.media-editor')).toHaveCount(0);
+  await page.getByRole('combobox', { name: 'Formato', exact: true }).selectOption('video'); await page.getByRole('button', { name: /Salvar alterações/ }).click();
+  await expect(page.getByRole('status')).toContainText('Alterações salvas');
+  await page.locator('#images-upload').setInputFiles({ name: 'container.mp4', mimeType: 'video/mp4', buffer: mp4Fixture() });
+  await expect(page.locator('.media-editor>video')).toHaveAttribute('controls', '');
+  await expect(page.locator('.preview video')).toHaveCount(1);
+  await expect(page.getByLabel('Título aplicado na arte (opcional)')).toHaveCount(0);
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  await page.screenshot({ path: 'test-results/media-mobile.png', fullPage: true });
 });
 
 test('lixeira remove publicações de todos os estados sem acessar o LinkedIn', async ({ page }) => {
@@ -90,7 +153,7 @@ test('copia o texto atual e abre a conversa configurada; informa falha ao copiar
   const text = 'Texto atual, ainda não salvo.\n\nCom acentuação e fonte: https://spring.io/';
   await page.getByLabel('Texto da publicação', { exact: true }).fill(text);
   const button = page.getByRole('button', { name: 'Copiar publicação e abrir ChatGPT ↗', exact: true });
-  const upload = page.getByRole('button', { name: /Importar imagens/ });
+  const upload = page.getByRole('button', { name: /Importar mídias/ });
   expect((await button.boundingBox())!.y).toBeLessThan((await upload.boundingBox())!.y);
   const popupEvent = page.waitForEvent('popup'); await button.focus(); await page.keyboard.press('Enter');
   const popup = await popupEvent; await popup.waitForURL(conversationUrl);
@@ -121,11 +184,11 @@ test('painel, revisão, importação, aprovação, exportação e responsividade
   await expect(page.getByRole('status')).toContainText('Alterações salvas');
   const image = await sharp({ create: { width: 800, height: 600, channels: 3, background: '#3869cc' } }).png().toBuffer();
   await page.locator('#images-upload').setInputFiles({ name: 'technical.png', mimeType: 'image/png', buffer: image });
-  await expect(page.getByRole('status')).toContainText('Imagens importadas');
+  await expect(page.getByRole('status')).toContainText('Mídias importadas');
   await page.getByRole('button', { name: 'Aprovar revisão' }).click();
   await expect(page.getByRole('status')).toContainText('Revisão aprovada');
   await expect(page.getByRole('button', { name: /Publicar no LinkedIn/ })).toBeDisabled();
-  const downloadEvent = page.waitForEvent('download'); await page.getByRole('link', { name: /Exportar texto e imagens/ }).click(); const download = await downloadEvent; expect(download.suggestedFilename()).toContain(id);
+  const downloadEvent = page.waitForEvent('download'); await page.getByRole('link', { name: /Exportar texto e mídias/ }).click(); const download = await downloadEvent; expect(download.suggestedFilename()).toContain(id);
   await page.screenshot({ path: 'test-results/editor-desktop.png', fullPage: true });
   await page.setViewportSize({ width: 390, height: 844 });
   await expect(page.getByRole('heading', { name: 'Revise e compartilhe.' })).toBeVisible();
@@ -144,11 +207,11 @@ test('galeria permite importação múltipla, reordenação, substituição e t�
   await page.setViewportSize({ width: 1440, height: 1000 });
   await page.goto('/'); await page.getByRole('button', { name: /Spring Boot: atualização prática/ }).first().click();
   await expect(page.getByRole('combobox', { name: 'Formato', exact: true })).toHaveValue('gallery');
-  expect(await page.getByRole('combobox', { name: 'Formato', exact: true }).locator('option').allTextContents()).toEqual(['Imagem única', 'Galeria de imagens']);
+  expect(await page.getByRole('combobox', { name: 'Formato', exact: true }).locator('option').allTextContents()).toEqual(['Somente texto', 'Imagem única', 'Galeria de imagens', 'GIF animado', 'Vídeo']);
   const one = await sharp({ create: { width: 800, height: 600, channels: 3, background: '#2865dd' } }).png().toBuffer();
   const two = await sharp({ create: { width: 800, height: 600, channels: 3, background: '#3a997f' } }).png().toBuffer();
   await page.locator('#images-upload').setInputFiles([{ name: 'one.png', mimeType: 'image/png', buffer: one }, { name: 'two.png', mimeType: 'image/png', buffer: two }]);
-  await expect(page.getByRole('status')).toContainText('Imagens importadas');
+  await expect(page.getByRole('status')).toContainText('Mídias importadas');
   await expect(page.locator('.media-editor')).toHaveCount(2);
   const imageBefore = await page.locator('.media-editor>img').first().getAttribute('src');
   await page.getByRole('button', { name: 'Mover imagem 1 para baixo', exact: true }).click();
@@ -201,7 +264,7 @@ test('configurações mostram estado de conexão e permitem salvar e conectar se
   expect(connections).toBe(1);
 });
 
-test('publicações geram sem seletor e removem qualquer estado com confirmação acessível', async ({ page }) => {
+test('publicações abrem modal de criação e removem qualquer estado com confirmação acessível', async ({ page }) => {
   const errors: string[] = []; page.on('pageerror', e => errors.push(e.message));
   const db = openDb(path.resolve('.local-data', 'browser-tests'));
   const id = seedPost(db), approvedId = seedPost(db);
@@ -244,7 +307,7 @@ test('publicações geram sem seletor e removem qualquer estado com confirmaçã
   const approvedRemove = page.getByRole('button', { name: `Remover publicação: ${approvedTitle}`, exact: true });
   await approvedRemove.click(); await dialog.getByRole('button', { name: 'Remover publicação', exact: true }).click();
   await expect(approvedRemove).toHaveCount(0);
-  await page.route('**/api/generate', async route => { expect(route.request().postDataJSON()).toEqual({}); await route.fulfill({ status: 202, json: { message: 'Geração iniciada.' } }); });
-  await page.getByRole('button', { name: 'Gerar agora' }).click(); await expect(page.getByRole('heading', { name: 'Execuções.' })).toBeVisible();
+  await page.getByRole('button', { name: 'Gerar agora' }).click();
+  await expect(page.getByRole('dialog', { name: 'Nova publicação' })).toBeVisible();
   expect(errors).toEqual([]);
 });

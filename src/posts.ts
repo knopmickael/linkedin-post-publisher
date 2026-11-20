@@ -5,11 +5,19 @@ import sharp from 'sharp';
 import type { Db } from './db.js';
 import { AppError } from './errors.js';
 import type { Editorial } from './openai.js';
+import { fileHash, imageLimit, inspectGif, inspectVideo, isGif, mediaPath } from './media.js';
 
-export type Post = { id: string; edited_text: string; generated_text: string; format: 'single' | 'gallery'; status: string; revision: number; approved_revision: number | null; visual_json: string; linkedin_urn: string | null; published_url: string | null; title: string; canonical_url: string; published_at: string; evidence: string; created_at: string; updated_at: string };
-export type Media = { id: string; post_id: string; path: string; original_path: string; position: number; alt_text: string; overlay_text: string; sha256: string; width: number; height: number; size: number };
+export type PostMode = 'news' | 'manual' | 'informative';
+export type PostFormat = 'text' | 'single' | 'gallery' | 'gif' | 'video';
+export type Post = { id: string; edited_text: string; generated_text: string; format: PostFormat; mode: PostMode; status: string; revision: number; approved_revision: number | null; visual_json: string; linkedin_urn: string | null; published_url: string | null; title: string; canonical_url: string | null; published_at: string | null; evidence: string | null; created_at: string; updated_at: string };
+export type Media = { id: string; post_id: string; path: string; original_path: string; position: number; alt_text: string; overlay_text: string; sha256: string; width: number; height: number; size: number; kind: 'image' | 'gif' | 'video'; mime_type: string; duration_ms: number | null };
+export function createManualPost(db: Db, subject?: string) {
+  const id = randomUUID(), now = new Date().toISOString();
+  db.prepare(`INSERT INTO posts(id,title,mode,generated_text,edited_text,format,status,visual_json,created_at,updated_at) VALUES (?,?,'manual','','','text','rascunho',?,?,?)`).run(id, subject?.trim() || 'Nova publicação manual', JSON.stringify({ desiredCount: 0, visualConcept: '', slides: [] }), now, now);
+  return id;
+}
 export function getPost(db: Db, id: string) {
-  const post = db.prepare('SELECT p.*,n.title,n.canonical_url,n.published_at,n.evidence FROM posts p JOIN news n ON n.id=p.news_id WHERE p.id=?').get(id) as Post | undefined;
+  const post = db.prepare("SELECT p.*,COALESCE(NULLIF(p.title,''),n.title,'Publicação') AS title,n.canonical_url,n.published_at,n.evidence FROM posts p LEFT JOIN news n ON n.id=p.news_id WHERE p.id=?").get(id) as Post | undefined;
   if (!post) throw new AppError('Publicação não encontrada.', 404);
   const media = db.prepare('SELECT * FROM media WHERE post_id=? ORDER BY position,id').all(id) as Media[];
   const attempts = db.prepare('SELECT id,revision,stage,outcome,http_status,linkedin_urn,detail,started_at,finished_at FROM attempts WHERE post_id=? ORDER BY started_at DESC').all(id);
@@ -23,6 +31,14 @@ export function editable(db: Db, id: string, revision: number) {
   return post;
 }
 export function touch(db: Db, id: string) { db.prepare("UPDATE posts SET revision=revision+1,approved_revision=NULL,status='rascunho',updated_at=? WHERE id=?").run(new Date().toISOString(), id); }
+export function validateMediaFormat(format: PostFormat, media: Array<Pick<Media, 'kind'>>) {
+  const expected = format === 'gif' ? 'gif' : format === 'video' ? 'video' : 'image';
+  if ((format === 'text' && media.length) || media.some(m => m.kind !== expected) || (format !== 'gallery' && media.length > 1)) throw new AppError('Mídias incompatíveis com o formato. Use GIF ou vídeo como arquivo único; galeria aceita somente imagens estáticas.');
+}
+function canAttach(post: ReturnType<typeof getPost>, kind: Media['kind'], replaceId?: string) {
+  validateMediaFormat(post.format, [...post.media.filter(m => m.id !== replaceId), { kind }]);
+  if (!replaceId && post.media.length >= 20) throw new AppError('Limite de 20 imagens por post.');
+}
 export function deletePost(db: Db, id: string, revision: number) {
   db.transaction(() => {
     const post = getPost(db, id);
@@ -38,14 +54,17 @@ export function deletePost(db: Db, id: string, revision: number) {
     db.prepare('DELETE FROM topics WHERE id=? AND NOT EXISTS (SELECT 1 FROM posts WHERE topic_id=topics.id) AND NOT EXISTS (SELECT 1 FROM news WHERE topic_id=topics.id)').run(topicId);
   })();
 }
-export function snapshot(db: Db, id: string) { const p = getPost(db, id); return JSON.stringify({ text: p.edited_text, format: p.format, media: p.media.map(m => ({ id: m.id, sha256: m.sha256, path: m.path, altText: m.alt_text, position: m.position })) }); }
+export function snapshot(db: Db, id: string) { const p = getPost(db, id); return JSON.stringify({ text: p.edited_text, format: p.format, media: p.media.map(m => ({ id: m.id, sha256: m.sha256, path: m.path, kind: m.kind, mimeType: m.mime_type, durationMs: m.duration_ms, altText: m.alt_text, position: m.position })) }); }
 export function approve(db: Db, id: string, revision: number) {
   db.transaction(() => {
     const post = editable(db, id, revision);
     if (!post.edited_text.trim() || post.edited_text.length > 3000) throw new AppError('O texto deve ter entre 1 e 3.000 caracteres.');
+    validateMediaFormat(post.format, post.media);
+    if (post.format === 'text' && post.media.length) throw new AppError('Somente texto exige remover as mídias ou escolher outro formato.');
     if ((post.format === 'single' && post.media.length !== 1) || (post.format === 'gallery' && (post.media.length < 2 || post.media.length > 20))) throw new AppError('Imagem única exige 1 arquivo; galeria exige de 2 a 20 imagens.');
+    if (['gif', 'video'].includes(post.format) && post.media.length !== 1) throw new AppError('GIF ou vídeo exige um arquivo único.');
     if (post.media.length !== post.visual.desiredCount) throw new AppError(`Importe ${post.visual.desiredCount} imagem(ns), conforme a quantidade definida para este post.`);
-    if (post.media.some(m => !m.alt_text.trim())) throw new AppError('Preencha o texto alternativo de todas as imagens.');
+    if (post.media.some(m => m.kind !== 'video' && !m.alt_text.trim())) throw new AppError('Preencha o texto alternativo de todas as imagens e GIFs.');
     const now = new Date().toISOString();
     db.prepare('INSERT INTO revisions VALUES (?,?,?,?,?) ON CONFLICT(post_id,revision) DO NOTHING').run(randomUUID(), id, revision, snapshot(db, id), now);
     db.prepare("UPDATE posts SET status='aprovado',approved_revision=?,updated_at=? WHERE id=?").run(revision, now, id);
@@ -74,33 +93,63 @@ export async function renderImage(bytes: Buffer, overlay = '') {
 }
 export async function addMedia(db: Db, dataDir: string, postId: string, revision: number, bytes: Buffer, altText = '', overlay = '') {
   const post = editable(db, postId, revision);
-  if (post.media.length >= 20) throw new AppError('Limite de 20 imagens por post.');
-  const rendered = await renderImage(bytes, overlay); const id = randomUUID();
-  const original = `media/${id}-original.png`, file = `media/${id}.png`;
-  await fs.writeFile(path.join(dataDir, original), await sharp(bytes).rotate().png().toBuffer(), { flag: 'wx' });
-  await fs.writeFile(path.join(dataDir, file), rendered.data, { flag: 'wx' });
-  try { db.transaction(() => {
-    editable(db, postId, revision);
-    db.prepare('INSERT INTO media(id,post_id,path,original_path,position,alt_text,overlay_text,sha256,width,height,size,created_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)').run(id, postId, file, original, post.media.length, altText, overlay, createHash('sha256').update(rendered.data).digest('hex'), rendered.info.width, rendered.info.height, rendered.data.length, new Date().toISOString());
+  const kind = isGif(bytes) ? 'gif' : 'image'; canAttach(post, kind);
+  const rendered = await prepareImage(bytes, overlay); const id = randomUUID();
+  const original = `media/${id}-original.${rendered.ext}`, file = `media/${id}.${rendered.ext}`;
+  await fs.writeFile(path.join(dataDir, original), rendered.original, { flag: 'wx' });
+  try { await fs.writeFile(path.join(dataDir, file), rendered.data, { flag: 'wx' });
+  db.transaction(() => {
+    canAttach(editable(db, postId, revision), kind);
+    db.prepare('INSERT INTO media(id,post_id,path,original_path,position,alt_text,overlay_text,sha256,width,height,size,created_at,kind,mime_type) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)').run(id, postId, file, original, post.media.length, altText, overlay, createHash('sha256').update(rendered.data).digest('hex'), rendered.width, rendered.height, rendered.data.length, new Date().toISOString(), kind, rendered.mime);
     touch(db, postId);
-  })(); } catch (e) { await fs.unlink(path.join(dataDir, original)); await fs.unlink(path.join(dataDir, file)); throw e; }
+  })(); } catch (e) { await fs.rm(path.join(dataDir, original), { force: true }); await fs.rm(path.join(dataDir, file), { force: true }); throw e; }
   return id;
 }
 export async function mediaBytes(dataDir: string, relative: string) {
-  const target = path.resolve(dataDir, relative); const root = path.resolve(dataDir, 'media') + path.sep;
-  if (!target.startsWith(root)) throw new AppError('Caminho de mídia inválido.');
-  return fs.readFile(target);
+  return fs.readFile(mediaPath(dataDir, relative));
+}
+
+async function prepareImage(bytes: Buffer, overlay = '') {
+  if (bytes.length > imageLimit) throw new AppError('Limite de 20 MB por imagem ou GIF.');
+  if (isGif(bytes)) {
+    if (overlay.trim()) throw new AppError('Título aplicado na arte não é compatível com GIF animado.');
+    const info = await inspectGif(bytes);
+    return { ...info, data: bytes, original: bytes, ext: 'gif', mime: 'image/gif' };
+  }
+  const original = await renderImage(bytes), rendered = overlay.trim() ? await renderImage(original.data, overlay) : original;
+  return { width: rendered.info.width, height: rendered.info.height, data: rendered.data, original: original.data, ext: 'png', mime: 'image/png' };
 }
 
 export async function replaceMedia(db: Db, dataDir: string, postId: string, mediaId: string, revision: number, bytes: Buffer) {
   const post = editable(db, postId, revision); const old = post.media.find(m => m.id === mediaId);
   if (!old) throw new AppError('Imagem a substituir não encontrada.', 404);
-  const original = await renderImage(bytes); const rendered = old.overlay_text ? await renderImage(bytes, old.overlay_text) : original;
-  const file = `media/${randomUUID()}.png`, originalFile = `media/${randomUUID()}-original.png`;
-  await fs.writeFile(path.join(dataDir, file), rendered.data, { flag: 'wx' }); await fs.writeFile(path.join(dataDir, originalFile), original.data, { flag: 'wx' });
-  db.transaction(() => {
-    editable(db, postId, revision);
-    db.prepare('UPDATE media SET path=?,original_path=?,sha256=?,width=?,height=?,size=? WHERE id=? AND post_id=?').run(file, originalFile, createHash('sha256').update(rendered.data).digest('hex'), rendered.info.width, rendered.info.height, rendered.data.length, mediaId, postId);
+  const kind = isGif(bytes) ? 'gif' : 'image'; canAttach(post, kind, mediaId);
+  if (old.kind !== kind) throw new AppError('Substitua por um arquivo do mesmo tipo de mídia.');
+  const rendered = await prepareImage(bytes, old.overlay_text);
+  const file = `media/${randomUUID()}.${rendered.ext}`, originalFile = `media/${randomUUID()}-original.${rendered.ext}`;
+  try {
+    await fs.writeFile(path.join(dataDir, file), rendered.data, { flag: 'wx' }); await fs.writeFile(path.join(dataDir, originalFile), rendered.original, { flag: 'wx' });
+    db.transaction(() => {
+    canAttach(editable(db, postId, revision), kind, mediaId);
+    db.prepare('UPDATE media SET path=?,original_path=?,sha256=?,width=?,height=?,size=? WHERE id=? AND post_id=?').run(file, originalFile, createHash('sha256').update(rendered.data).digest('hex'), rendered.width, rendered.height, rendered.data.length, mediaId, postId);
     touch(db, postId);
-  })();
+  })(); } catch (error) { await fs.rm(path.join(dataDir, file), { force: true }); await fs.rm(path.join(dataDir, originalFile), { force: true }); throw error; }
+}
+
+export async function addVideoFile(db: Db, dataDir: string, postId: string, revision: number, temporaryPath: string, description = '', replaceId?: string) {
+  const post = editable(db, postId, revision);
+  if (replaceId && !post.media.some(m => m.id === replaceId && m.kind === 'video')) throw new AppError('Vídeo a substituir não encontrado.', 404);
+  canAttach(post, 'video', replaceId);
+  const meta = await inspectVideo(temporaryPath), hash = await fileHash(temporaryPath);
+  const id = replaceId ?? randomUUID(), file = `media/${randomUUID()}.mp4`;
+  try {
+    await fs.copyFile(temporaryPath, path.join(dataDir, file), fs.constants.COPYFILE_EXCL);
+    db.transaction(() => {
+      canAttach(editable(db, postId, revision), 'video', replaceId);
+      if (replaceId) db.prepare('UPDATE media SET path=?,original_path=?,sha256=?,width=?,height=?,size=?,duration_ms=? WHERE id=? AND post_id=?').run(file, file, hash, meta.width, meta.height, meta.size, meta.durationMs, id, postId);
+      else db.prepare("INSERT INTO media(id,post_id,path,original_path,position,alt_text,sha256,width,height,size,created_at,kind,mime_type,duration_ms) VALUES (?,?,?,?,?,?,?,?,?,?,?,'video','video/mp4',?)").run(id, postId, file, file, 0, description, hash, meta.width, meta.height, meta.size, new Date().toISOString(), meta.durationMs);
+      touch(db, postId);
+    })();
+    return id;
+  } catch (error) { await fs.rm(path.join(dataDir, file), { force: true }); throw error; }
 }

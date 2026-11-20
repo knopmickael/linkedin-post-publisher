@@ -27,7 +27,7 @@ test('geração pesquisa o assunto informado ou usa os predefinidos e registra a
     const input = JSON.parse(body.input[0].content);
     requests.push({ instructions: body.instructions, subject: input.subject });
     const result = input.subject === 'Assunto sem cobertura' ? null : {
-      sourceId: input.sources[0].id, eventKey: `evento-${requests.length}`, text,
+      sourceId: input.sources[0].id, eventKey: `evento-${requests.length}`, text, hashtags: ['Tecnologia', 'Segurança', 'Software'],
       visualConcept: 'Ilustração editorial técnica.',
       slides: [{ purpose: 'Impacto prático', imagePrompt: 'Blocos de software azuis', overlayText: '', altText: 'Blocos conectados' }],
     };
@@ -52,7 +52,8 @@ test('geração pesquisa o assunto informado ou usa os predefinidos e registra a
         assert.match(requests[index].instructions, /assunto informado substitui os temas predefinidos/);
         assert.ok(!requests[index].instructions.includes(expectedSubject));
       } else {
-        assert.match(requests[index].instructions, /exclusivamente AI .*Cloud, System Design, arquitetura de software, performance e escalabilidade/);
+        assert.match(requests[index].instructions, /notícias.*tecnologia/i);
+        assert.match(requests[index].instructions, /vulnerabilidades/i);
       }
       if (index === 3) {
         assert.equal(result.status, 'sem_pauta');
@@ -62,6 +63,7 @@ test('geração pesquisa o assunto informado ou usa os predefinidos e registra a
         assert.equal(result.status, 'concluido');
         const post = db.prepare('SELECT edited_text FROM posts WHERE id=?').get(result.postId) as { edited_text: string };
         assert.ok(post.edited_text.endsWith(url));
+        assert.match(post.edited_text, /#Tecnologia #Segurança #Software/);
       }
     }
     assert.equal((db.prepare('SELECT count(*) AS total FROM posts').get() as { total: number }).total, 3);
@@ -103,4 +105,32 @@ test('migração adiciona assunto preservando execuções anteriores e reaplica�
     db.close(); db = openDb(dir);
     assert.deepEqual(db.prepare('SELECT subject FROM runs WHERE id=?').get('old-run'), { subject: 'Assunto preservado' });
   } finally { db.close(); await fs.rm(dir, { recursive: true, force: true }); }
+});
+
+test('dissertação gera conteúdo informativo sem RSS ou notícia e exige assunto', async t => {
+  const dir = await fs.mkdtemp(path.join(tempBase, 'publisher-informative-'));
+  const { app, db, auth } = await createApp({ port: 4317, origin: 'http://127.0.0.1:4317', dataDir: dir, https: undefined });
+  t.mock.method(auth, 'access', fakeAuth.access);
+  db.prepare('DELETE FROM feeds').run(); setSetting(db, 'model', 'test-model');
+  t.mock.method(globalThis, 'fetch', async (url: unknown, init: RequestInit) => {
+    assert.equal(String(url), 'https://api.openai.com/v1/responses');
+    const body = JSON.parse(String(init.body));
+    assert.equal(JSON.parse(body.input[0].content).subject, 'Kubernetes');
+    const result = { title: 'Kubernetes: organização de aplicações', text: 'Kubernetes organiza aplicações em contêineres. Pods executam as cargas, Deployments gerenciam réplicas e Services oferecem um ponto estável para acesso às aplicações.', hashtags: ['Kubernetes', '#CloudNative', 'DevOps'], visualConcept: 'Ilustração de uma plataforma de contêineres.', slides: [{ purpose: 'Conceitos', imagePrompt: 'Blocos interligados', overlayText: '', altText: 'Blocos de aplicações' }] };
+    return new Response([{ type: 'response.output_text.delta', delta: JSON.stringify(result) }, { type: 'response.completed' }].map(event => `data: ${JSON.stringify(event)}\n\n`).join('') + 'data: [DONE]\n\n', { headers: { 'Content-Type': 'text/event-stream' } });
+  });
+  try {
+    const session = await app.inject({ url: '/api/session', headers: { host: '127.0.0.1:4317' } });
+    const headers = { host: '127.0.0.1:4317', origin: 'http://127.0.0.1:4317', cookie: `publisher=${session.cookies[0].value}`, 'x-csrf-token': session.json().csrf };
+    for (const payload of [{ mode: 'informative' }, { mode: 'informative', subject: '  ' }, { mode: 'invalid', subject: 'Kubernetes' }]) assert.equal((await app.inject({ method: 'POST', url: '/api/generate', headers, payload })).statusCode, 400);
+    assert.equal((db.prepare('SELECT count(*) AS n FROM runs').get() as { n: number }).n, 0);
+    assert.equal((await app.inject({ method: 'POST', url: '/api/generate', headers, payload: { mode: 'informative', subject: '  Kubernetes  ' } })).statusCode, 202);
+    for (let i = 0; i < 100 && !db.prepare("SELECT 1 FROM runs WHERE status='concluido'").get(); i++) await new Promise(resolve => setTimeout(resolve, 10));
+    const posts = (await app.inject({ url: '/api/posts', headers })).json();
+    assert.equal(posts.length, 1); assert.equal(posts[0].mode, 'informative');
+    assert.match(posts[0].edited_text, /#Kubernetes #CloudNative #DevOps$/);
+    assert.equal((await app.inject({ url: `/api/posts/${posts[0].id}`, headers })).json().canonical_url, null);
+    assert.equal((db.prepare('SELECT count(*) AS n FROM news').get() as { n: number }).n, 0);
+    assert.equal((db.prepare('SELECT mode FROM runs').get() as { mode: string }).mode, 'informative');
+  } finally { await app.close(); await fs.rm(dir, { recursive: true, force: true }); }
 });
